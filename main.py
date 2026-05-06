@@ -51,23 +51,40 @@ def load_existing_alerts():
     for filename in files:
         if filename.startswith("alert_") and filename.endswith(".jpg"):
             try:
-                # alert_ID_YYYYMMDD-HHMMSS.jpg or legacy format
-                parts = filename.replace("alert_", "").replace(".jpg", "").split("-")
-                # Simplified check for date
-                file_date_str = parts[-2] if len(parts) > 1 else "0"
+                # Format expected: alert_camera_01_YYYYMMDD-HHMMSS.jpg
+                # or legacy: alert_YYYYMMDD-HHMMSS.jpg
+                parts = filename.replace("alert_", "").replace(".jpg", "").split("_")
                 
-                if file_date_str != today_str:
+                cam_id = "camera_01" # default
+                date_part = ""
+                
+                if len(parts) >= 2:
+                    if parts[0].startswith("camera"):
+                        cam_id = f"{parts[0]}_{parts[1]}"
+                        date_part = parts[2].split("-")[0]
+                        time_part = parts[2].split("-")[1]
+                    else:
+                        date_part = parts[0].split("-")[0]
+                        time_part = parts[0].split("-")[1]
+
+                # Filtra apenas alertas de hoje
+                if date_part != today_str:
                     continue
+                
+                formatted_date = f"{date_part[6:8]}/{date_part[4:6]}/{date_part[0:4]}"
+                formatted_time = f"{time_part[0:2]}:{time_part[2:4]}:{time_part[4:6]}"
                 
                 alert_history.append({
                     "id": len(alert_history) + 1,
-                    "time": "N/A",
-                    "date": "N/A",
-                    "message": "Alerta recuperado",
+                    "time": formatted_time,
+                    "date": formatted_date,
+                    "camera": CAMERAS.get(cam_id, {}).get("name", "Câmera Antiga"),
+                    "message": "Rompimento de fel detectado na linha!",
                     "image_url": f"/alerts_files/{filename}"
                 })
                 loaded_count += 1
             except Exception as e:
+                print(f"Erro ao carregar alerta {filename}: {e}")
                 continue
     print(f"Total de {loaded_count} alertas carregados hoje.")
 
