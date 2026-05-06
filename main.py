@@ -24,6 +24,47 @@ CONFIG = {
 # In-memory alert history
 alert_history = []
 
+def load_existing_alerts():
+    global alert_history
+    if not os.path.exists("alerts"):
+        os.makedirs("alerts")
+        return
+
+    print("Carregando alertas existentes do dia...")
+    files = sorted(os.listdir("alerts"), reverse=True)
+    today_str = time.strftime("%Y%m%d")
+    
+    loaded_count = 0
+    for filename in files:
+        if filename.startswith("alert_") and filename.endswith(".jpg"):
+            try:
+                # alert_YYYYMMDD-HHMMSS.jpg
+                parts = filename.replace("alert_", "").replace(".jpg", "").split("-")
+                file_date_str = parts[0]
+                file_time_str = parts[1]
+                
+                # Filtra apenas alertas de hoje
+                if file_date_str != today_str:
+                    continue
+                
+                formatted_date = f"{file_date_str[6:8]}/{file_date_str[4:6]}/{file_date_str[0:4]}"
+                formatted_time = f"{file_time_str[0:2]}:{file_time_str[2:4]}:{file_time_str[4:6]}"
+                
+                alert_history.append({
+                    "id": len(alert_history) + 1,
+                    "time": formatted_time,
+                    "date": formatted_date,
+                    "message": "Rompimento de fel detectado na linha!",
+                    "image_url": f"/alerts_files/{filename}"
+                })
+                loaded_count += 1
+            except Exception as e:
+                continue
+    print(f"Total de {loaded_count} alertas carregados hoje.")
+
+# Inicializa o histórico com os arquivos já existentes
+load_existing_alerts()
+
 # Global variable for the latest frame
 latest_frame = None
 lock = threading.Lock()
