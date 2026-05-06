@@ -15,9 +15,9 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Define range for the bile (fel) based on the calibration tray
-    # The liquid is darker, with yellow/green hues.
-    lower_green = np.array([15, 20, 10])
+    # Adjusted range to avoid yellow (gloves) and keep the green/brown bile
+    # We move the lower hue to 30 to skip pure yellow/orange.
+    lower_green = np.array([30, 40, 20])
     upper_green = np.array([90, 255, 255])
     
     # Create a mask for green color
@@ -34,7 +34,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 100: # Minimum area to consider it a rupture
+        if area > 600: # Increased area to avoid reflections and small spots
             x, y, w, h = cv2.boundingRect(cnt)
             detections.append({'rect': (x, y, w, h), 'area': area})
             
