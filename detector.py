@@ -43,48 +43,47 @@ def detect_green_stain(frame, roi_polygon):
 def find_cofre(frame):
     """
     Automatically detects the square metallic funnel (cofre) and returns its ROI points.
+    Improved version using brightness thresholding for metallic objects.
     """
-    # Convert to grayscale and improve contrast
+    # Convert to grayscale
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    gray = clahe.apply(gray)
     
     # Blur to reduce noise
-    blurred = cv2.GaussianBlur(gray, (9, 9), 0)
+    blurred = cv2.GaussianBlur(gray, (11, 11), 0)
     
-    # Adaptive thresholding to find edges of metallic object
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+    # Simple thresholding: metallic cofre is usually brighter than the floor
+    # We use a lower threshold to capture more of the bin's shape
+    _, thresh = cv2.threshold(blurred, 120, 255, cv2.THRESH_BINARY)
     
-    # Morphological operations to close gaps
-    kernel = np.ones((5,5), np.uint8)
+    # Morphological operations to merge parts of the metallic object
+    kernel = np.ones((7,7), np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_DILATE, kernel)
     
     # Find contours
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     best_approx = None
     max_area = 0
-    
-    # We look for a square/rectangular shape in the upper half of the image
     height, width = frame.shape[:2]
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 8000 or area > (width * height * 0.2): continue
+        # Relaxed area constraints
+        if area < 3000 or area > (width * height * 0.4): continue
         
         peri = cv2.arcLength(cnt, True)
-        approx = cv2.approxPolyDP(cnt, 0.04 * peri, True)
+        approx = cv2.approxPolyDP(cnt, 0.05 * peri, True)
         
-        # If it has 4-6 points (accounting for perspective/distortion)
+        # We look for something roughly rectangular (4 to 8 points)
         if 4 <= len(approx) <= 8:
-            # Check if it's roughly in the middle/top
             M = cv2.moments(cnt)
             if M["m00"] != 0:
                 cX = int(M["m10"] / M["m00"])
                 cY = int(M["m01"] / M["m00"])
                 
-                # The cofre in the image is centered top
-                if 200 < cX < width - 200 and cY < height // 2:
+                # Check if it's in the top 70% of the image
+                if cY < height * 0.7:
                     if area > max_area:
                         max_area = area
                         best_approx = approx.reshape(-1, 2)
