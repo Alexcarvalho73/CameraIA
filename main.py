@@ -11,18 +11,31 @@ from detector import detect_green_stain
 app = Flask(__name__)
 CORS(app)
 
-# Configuration (In a real app, these would come from a database or .env)
+# Configuration for Multiple Cameras
+CAMERAS = {
+    "camera_01": {
+        "name": "Esteira - Ruptura de Fel",
+        "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
+        "roi": [[360, 540], [640, 480], [1080, 1020], [520, 1020]],
+        "type": "color_detection"
+    },
+    "camera_02": {
+        "name": "Cofre - Fluxo de Vesícula",
+        "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=2&subtype=0",
+        "roi": [[100, 100], [400, 100], [400, 400], [100, 400]], # Placeholder
+        "type": "behavior_detection"
+    }
+}
+
 CONFIG = {
-    "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
-    "roi": [[360, 540], [640, 480], [1080, 1020], [520, 1020]],
-    "whatsapp_number": "5511999999999",
-    "alert_webhook": "http://localhost:3000/send-whatsapp", # Example endpoint from previous project
-    "last_alert_time": 0,
-    "alert_cooldown": 5 # Reduced for testing, adjust as needed
+    "alert_cooldown": 5,
+    "last_alert_time": {} # Store per camera
 }
 
 # In-memory alert history
 alert_history = []
+latest_frames = {}
+lock = threading.Lock()
 
 def load_existing_alerts():
     global alert_history
@@ -38,23 +51,19 @@ def load_existing_alerts():
     for filename in files:
         if filename.startswith("alert_") and filename.endswith(".jpg"):
             try:
-                # alert_YYYYMMDD-HHMMSS.jpg
+                # alert_ID_YYYYMMDD-HHMMSS.jpg or legacy format
                 parts = filename.replace("alert_", "").replace(".jpg", "").split("-")
-                file_date_str = parts[0]
-                file_time_str = parts[1]
+                # Simplified check for date
+                file_date_str = parts[-2] if len(parts) > 1 else "0"
                 
-                # Filtra apenas alertas de hoje
                 if file_date_str != today_str:
                     continue
                 
-                formatted_date = f"{file_date_str[6:8]}/{file_date_str[4:6]}/{file_date_str[0:4]}"
-                formatted_time = f"{file_time_str[0:2]}:{file_time_str[2:4]}:{file_time_str[4:6]}"
-                
                 alert_history.append({
                     "id": len(alert_history) + 1,
-                    "time": formatted_time,
-                    "date": formatted_date,
-                    "message": "Rompimento de fel detectado na linha!",
+                    "time": "N/A",
+                    "date": "N/A",
+                    "message": "Alerta recuperado",
                     "image_url": f"/alerts_files/{filename}"
                 })
                 loaded_count += 1
@@ -65,52 +74,53 @@ def load_existing_alerts():
 # Inicializa o histórico com os arquivos já existentes
 load_existing_alerts()
 
-# Global variable for the latest frame
-latest_frame = None
-lock = threading.Lock()
-
-def video_stream_thread():
-    global latest_frame
-    cap = cv2.VideoCapture(CONFIG["rtsp_url"])
+def video_stream_thread(cam_id):
+    global latest_frames
+    cam_cfg = CAMERAS[cam_id]
+    cap = cv2.VideoCapture(cam_cfg["rtsp_url"])
+    
+    print(f"Iniciando thread para {cam_id}...")
     
     while True:
         ret, frame = cap.read()
         if not ret:
-            print("Failed to grab frame, retrying...")
-            cap.open(CONFIG["rtsp_url"])
+            print(f"Failed to grab frame for {cam_id}, retrying...")
+            cap.open(cam_cfg["rtsp_url"])
             time.sleep(2)
             continue
             
-        # Process detection
-        roi_points = np.array(CONFIG["roi"], np.int32)
-        detections, _ = detect_green_stain(frame, roi_points)
+        # Process detection based on camera type
+        roi_points = np.array(cam_cfg["roi"], np.int32)
         
-        # Draw detections on frame for visual feedback
-        for det in detections:
-            x, y, w, h = det['rect']
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-            cv2.putText(frame, "ROMPIMENTO FEL", (x, y-10), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-            
-            # Trigger Alert
-            trigger_alert(f"Rompimento de fel detectado na linha!", frame)
+        if cam_cfg["type"] == "color_detection":
+            detections, _ = detect_green_stain(frame, roi_points)
+            for det in detections:
+                x, y, w, h = det['rect']
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
+        
+        elif cam_cfg["type"] == "behavior_detection":
+            # Placeholder for behavior logic
+            cv2.putText(frame, "Monitorando Comportamento...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
 
         # Draw ROI lines
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
 
         with lock:
-            latest_frame = frame.copy()
+            latest_frames[cam_id] = frame.copy()
             
-        time.sleep(0.03) # ~30 FPS
+        time.sleep(0.03)
 
-def trigger_alert(message, frame):
+def trigger_alert(message, frame, cam_id):
     current_time = time.time()
-    if current_time - CONFIG["last_alert_time"] > CONFIG["alert_cooldown"]:
-        CONFIG["last_alert_time"] = current_time
+    last_time = CONFIG["last_alert_time"].get(cam_id, 0)
+    
+    if current_time - last_time > CONFIG["alert_cooldown"]:
+        CONFIG["last_alert_time"][cam_id] = current_time
         
         # Save image
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"alert_{timestamp}.jpg"
+        filename = f"alert_{cam_id}_{timestamp}.jpg"
         filepath = os.path.join("alerts", filename)
         cv2.imwrite(filepath, frame)
         
@@ -118,17 +128,17 @@ def trigger_alert(message, frame):
             "id": len(alert_history) + 1,
             "time": time.strftime("%H:%M:%S"),
             "date": time.strftime("%d/%m/%Y"),
+            "camera": CAMERAS[cam_id]["name"],
             "message": message,
             "image_url": f"/alerts_files/{filename}"
         }
         alert_history.insert(0, alert_data) # Newest first
         if len(alert_history) > 50: alert_history.pop() # Keep last 50
         
-        print(f"ALERT SAVED: {message} -> {filepath}")
+        print(f"ALERT SAVED [{cam_id}]: {message} -> {filepath}")
         
         # WhatsApp integration placeholder
         try:
-            # requests.post(CONFIG["alert_webhook"], json={"to": CONFIG["whatsapp_number"], "message": message})
             pass
         except Exception as e:
             print(f"Failed to send alert: {e}")
@@ -145,18 +155,19 @@ def get_alerts():
 def index():
     return send_from_directory('.', 'index.html')
 
-@app.route('/video_feed')
-def video_feed():
+@app.route('/video_feed/<cam_id>')
+def video_feed(cam_id):
     def generate():
         while True:
             with lock:
-                if latest_frame is None:
+                if cam_id not in latest_frames:
                     continue
-                (flag, encodedImage) = cv2.imencode(".jpg", latest_frame)
+                (flag, encodedImage) = cv2.imencode(".jpg", latest_frames[cam_id])
                 if not flag:
                     continue
+                frame_bytes = encodedImage.tobytes()
             yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-                   bytearray(encodedImage) + b'\r\n')
+                   frame_bytes + b'\r\n\r\n')
             time.sleep(0.04)
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
@@ -170,9 +181,17 @@ def handle_config():
     return jsonify(CONFIG)
 
 if __name__ == '__main__':
-    # Start the video thread
-    t = threading.Thread(target=video_stream_thread)
-    t.daemon = True
-    t.start()
+    # Ensure alerts folder exists
+    if not os.path.exists('alerts'):
+        os.makedirs('alerts')
     
+    # Load history
+    load_existing_alerts()
+
+    # Start threads for each camera
+    for cam_id in CAMERAS:
+        t = threading.Thread(target=video_stream_thread, args=(cam_id,))
+        t.daemon = True
+        t.start()
+
     app.run(host='0.0.0.0', port=5050, debug=False, threaded=True)
