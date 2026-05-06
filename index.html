@@ -322,14 +322,7 @@
             <div class="alerts-panel">
                 <h3 style="margin-bottom: 20px;">Alertas Recentes</h3>
                 <div id="alerts-list">
-                    <div class="alert-item">
-                        <p class="alert-time">Hoje, 09:42</p>
-                        <p>Rompimento detectado - Esteira B</p>
-                    </div>
-                    <div class="alert-item">
-                        <p class="alert-time">Hoje, 08:15</p>
-                        <p>Rompimento detectado - Esteira A</p>
-                    </div>
+                    <!-- Alerts will be loaded here dynamically -->
                 </div>
             </div>
         </aside>
@@ -345,7 +338,7 @@
     </div>
 
     <script>
-        let lastAlertCount = 0;
+        let lastAlertCount = -1; // Initialize to -1 to force first load
 
         async function fetchAlerts() {
             try {
