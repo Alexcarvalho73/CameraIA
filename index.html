@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visão IA - Monitoramento de Frigorífico</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #00f2fe;
+            --secondary: #4facfe;
+            --bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --danger: #ef4444;
+            --success: #10b981;
+            --text: #f8fafc;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background: var(--bg);
+            background-image: 
+                radial-gradient(at 0% 0%, hsla(210,100%,10%,1) 0, transparent 50%), 
+                radial-gradient(at 100% 100%, hsla(200,100%,15%,1) 0, transparent 50%);
+            color: var(--text);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 300px 1fr 350px;
+            height: 100vh;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        /* Sidebar Left */
+        .sidebar-left {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .logo {
+            font-size: 24px;
+            font-weight: 700;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 40px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .menu-item {
+            padding: 15px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .menu-item.active {
+            background: rgba(79, 172, 254, 0.1);
+            color: var(--primary);
+            border-left: 4px solid var(--primary);
+        }
+
+        /* Main Content */
+        .main-view {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .header-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: transform 0.3s;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            margin: 10px 0;
+        }
+
+        .camera-container {
+            flex: 1;
+            background: #000;
+            border-radius: 24px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            border: 2px solid rgba(79, 172, 254, 0.2);
+        }
+
+        .camera-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .status-badge {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 8px 16px;
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid var(--success);
+            color: var(--success);
+            border-radius: 100px;
+            font-size: 12px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        /* Sidebar Right */
+        .sidebar-right {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .alerts-panel {
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 24px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .alert-item {
+            padding: 15px;
+            background: rgba(239, 68, 68, 0.1);
+            border-left: 4px solid var(--danger);
+            border-radius: 8px;
+            margin-bottom: 12px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .alert-time {
+            font-size: 12px;
+            opacity: 0.6;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.4; }
+            100% { opacity: 1; }
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(30px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            max-width: 90%;
+            max-height: 90%;
+            position: relative;
+        }
+
+        .modal-content img {
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 0 30px var(--primary);
+        }
+
+        .close-modal {
+            position: absolute;
+            top: -40px;
+            right: 0;
+            color: white;
+            font-size: 30px;
+            cursor: pointer;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+            .sidebar-left, .sidebar-right {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <aside class="sidebar-left">
+            <div class="logo">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+                Visão IA
+            </div>
+            
+            <nav>
+                <div class="menu-item active">Dashboard</div>
+                <div class="menu-item">Relatórios</div>
+                <div class="menu-item">Configurações</div>
+                <div class="menu-item">Usuários</div>
+            </nav>
+
+            <div style="margin-top: auto; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 15px;">
+                <p style="font-size: 12px; opacity: 0.5;">Câmera Ativa</p>
+                <p style="font-weight: 600;">Linha de Produção 01</p>
+            </div>
+        </aside>
+
+        <main class="main-view">
+            <div class="header-stats">
+                <div class="stat-card">
+                    <p style="opacity: 0.6; font-size: 14px;">Total de Ocorrências</p>
+                    <div class="stat-value" id="total-alerts">12</div>
+                    <p style="color: var(--danger); font-size: 12px;">↑ 12% desde ontem</p>
+                </div>
+                <div class="stat-card">
+                    <p style="opacity: 0.6; font-size: 14px;">Eficiência da Linha</p>
+                    <div class="stat-value">98.4%</div>
+                    <p style="color: var(--success); font-size: 12px;">Estável</p>
+                </div>
+                <div class="stat-card">
+                    <p style="opacity: 0.6; font-size: 14px;">Uptime Sistema</p>
+                    <div class="stat-value">24h 12m</div>
+                    <p style="opacity: 0.4; font-size: 12px;">Sem interrupções</p>
+                </div>
+            </div>
+
+            <div class="camera-container">
+                <div class="status-badge">
+                    <div class="status-dot"></div>
+                    LIVE - CAMERA 01
+                </div>
+                <!-- Camera Feed from Flask -->
+                <img src="http://localhost:5050/video_feed" class="camera-feed" alt="Video Feed">
+            </div>
+        </main>
+
+        <aside class="sidebar-right">
+            <div class="alerts-panel">
+                <h3 style="margin-bottom: 20px;">Alertas Recentes</h3>
+                <div id="alerts-list">
+                    <div class="alert-item">
+                        <p class="alert-time">Hoje, 09:42</p>
+                        <p>Rompimento detectado - Esteira B</p>
+                    </div>
+                    <div class="alert-item">
+                        <p class="alert-time">Hoje, 08:15</p>
+                        <p>Rompimento detectado - Esteira A</p>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Modal for Alert Images -->
+    <div id="alertModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeModal()">&times;</span>
+            <img id="modalImg" src="" alt="Alerta">
+            <p id="modalInfo" style="margin-top: 15px; text-align: center; font-weight: 600;"></p>
+        </div>
+    </div>
+
+    <script>
+        let lastAlertCount = 0;
+
+        async function fetchAlerts() {
+            try {
+                const response = await fetch('/alerts');
+                const alerts = await response.json();
+                
+                const list = document.getElementById('alerts-list');
+                const totalBadge = document.getElementById('total-alerts');
+                
+                totalBadge.innerText = alerts.length;
+                
+                // Only update if count changed
+                if (alerts.length !== lastAlertCount) {
+                    list.innerHTML = '';
+                    alerts.forEach(alert => {
+                        const div = document.createElement('div');
+                        div.className = 'alert-item';
+                        div.style.cursor = 'pointer';
+                        div.onclick = () => openModal(alert.image_url, `${alert.date} ${alert.time} - ${alert.message}`);
+                        div.innerHTML = `
+                            <p class="alert-time">${alert.date} ${alert.time}</p>
+                            <p>${alert.message}</p>
+                        `;
+                        list.appendChild(div);
+                    });
+                    lastAlertCount = alerts.length;
+                }
+            } catch (e) {
+                console.error("Error fetching alerts:", e);
+            }
+        }
+
+        function openModal(imgUrl, info) {
+            document.getElementById('modalImg').src = imgUrl;
+            document.getElementById('modalInfo').innerText = info;
+            document.getElementById('alertModal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('alertModal').style.display = 'none';
+        }
+
+        // Fetch alerts every 2 seconds
+        setInterval(fetchAlerts, 2000);
+        fetchAlerts();
+
+        console.log("Dashboard IA carregado com monitoramento de alertas.");
+    </script>
+</body>
+</html>
