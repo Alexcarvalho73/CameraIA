@@ -21,7 +21,7 @@ CAMERAS = {
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
-        "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=2&subtype=0",
+        "rtsp_url": "rtsp://admin:013579ab@10.200.96.81:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[100, 100], [400, 100], [400, 400], [100, 400]], # Placeholder
         "type": "behavior_detection"
     }
