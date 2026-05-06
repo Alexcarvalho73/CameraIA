@@ -6,7 +6,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 import threading
 import numpy as np
-from detector import detect_green_stain
+from detector import detect_green_stain, find_cofre
 
 app = Flask(__name__)
 CORS(app)
@@ -117,8 +117,23 @@ def video_stream_thread(cam_id):
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
         
         elif cam_cfg["type"] == "behavior_detection":
-            # Placeholder for behavior logic
-            cv2.putText(frame, "Monitorando Comportamento...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            # 1. Tentar localizar o cofre dinamicamente
+            dynamic_roi = find_cofre(frame)
+            if dynamic_roi is not None:
+                cam_cfg["roi"] = dynamic_roi.tolist()
+                roi_points = dynamic_roi
+                cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
+                cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                
+                # 2. Verificar se há líquido verde caindo no cofre (dentro do ROI dinâmico)
+                detections, _ = detect_green_stain(frame, roi_points)
+                if detections:
+                    cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            else:
+                # Se não achar o cofre, usa o último ROI conhecido mas avisa
+                cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
+                cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
         # Draw ROI lines
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
