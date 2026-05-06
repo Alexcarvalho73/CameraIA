@@ -151,6 +151,34 @@
             z-index: 10;
         }
 
+        .record-btn {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            background: rgba(239, 68, 68, 0.8);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            z-index: 10;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+
+        .record-btn:hover {
+            background: var(--danger);
+            transform: scale(1.05);
+        }
+
+        .record-btn.recording {
+            background: #10b981;
+            animation: pulse 2s infinite;
+        }
+
         .status-dot {
             width: 8px;
             height: 8px;
@@ -335,6 +363,10 @@
                         CAM 01 - RUPTURA
                     </div>
                     <img src="/video_feed/camera_01" class="camera-feed" alt="Video Feed 1">
+                    <button id="btn-record-camera_01" class="record-btn" onclick="toggleRecord('camera_01')">
+                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
+                        Gravar
+                    </button>
                 </div>
                 <div class="camera-container">
                     <div class="status-badge">
@@ -342,6 +374,10 @@
                         CAM 02 - COMPORTAMENTO
                     </div>
                     <img src="/video_feed/camera_02" class="camera-feed" alt="Video Feed 2">
+                    <button id="btn-record-camera_02" class="record-btn" onclick="toggleRecord('camera_02')">
+                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
+                        Gravar
+                    </button>
                 </div>
             </div>
         </main>
@@ -383,6 +419,29 @@
                 main.style.display = 'block';
                 mainFeed.src = `/video_feed/${camId}`;
                 mainTitle.innerText = camId === 'camera_01' ? 'CAM 01 - RUPTURA' : 'CAM 02 - COMPORTAMENTO';
+            }
+        }
+
+        let isRecording = { "camera_01": false, "camera_02": false };
+
+        async function toggleRecord(camId) {
+            const btn = document.getElementById(`btn-record-${camId}`);
+            if (!isRecording[camId]) {
+                const res = await fetch(`/start_record/${camId}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    isRecording[camId] = true;
+                    btn.classList.add('recording');
+                    btn.innerHTML = 'Parar Gravação';
+                }
+            } else {
+                const res = await fetch(`/stop_record/${camId}`);
+                const data = await res.json();
+                if (data.status === 'success') {
+                    isRecording[camId] = false;
+                    btn.classList.remove('recording');
+                    btn.innerHTML = '<div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div> Gravar';
+                }
             }
         }
 

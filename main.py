@@ -35,6 +35,7 @@ CONFIG = {
 # In-memory alert history
 alert_history = []
 latest_frames = {}
+recording_states = {} # cam_id: VideoWriter or None
 lock = threading.Lock()
 
 def load_existing_alerts():
@@ -135,6 +136,11 @@ def video_stream_thread(cam_id):
                 cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
                 cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
+        # Handle Recording
+        with lock:
+            if cam_id in recording_states and recording_states[cam_id]:
+                recording_states[cam_id].write(frame)
+
         # Draw ROI lines
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
 
@@ -203,6 +209,38 @@ def video_feed(cam_id):
             time.sleep(0.04)
 
     return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/start_record/<cam_id>')
+def start_record(cam_id):
+    global recording_states
+    if cam_id not in latest_frames:
+        return jsonify({"status": "error", "message": "Camera not active"})
+    
+    with lock:
+        if cam_id in recording_states and recording_states[cam_id]:
+            return jsonify({"status": "error", "message": "Already recording"})
+        
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"record_{cam_id}_{timestamp}.avi"
+        filepath = os.path.join("alerts", filename)
+        
+        # Define codec and create VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        h, w = latest_frames[cam_id].shape[:2]
+        out = cv2.VideoWriter(filepath, fourcc, 20.0, (w, h))
+        recording_states[cam_id] = out
+        
+    return jsonify({"status": "success", "filename": filename})
+
+@app.route('/stop_record/<cam_id>')
+def stop_record(cam_id):
+    global recording_states
+    with lock:
+        if cam_id in recording_states and recording_states[cam_id]:
+            recording_states[cam_id].release()
+            recording_states[cam_id] = None
+            return jsonify({"status": "success"})
+    return jsonify({"status": "error", "message": "Not recording"})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
