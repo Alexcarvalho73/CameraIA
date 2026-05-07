@@ -1,5 +1,6 @@
 import os
 import cv2
+import json
 import time
 import threading
 import numpy as np
@@ -35,6 +36,49 @@ CAMERAS = {
         "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
     }
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PERSISTÊNCIA DE ROI  (roi_config.json)
+# ─────────────────────────────────────────────────────────────────────────────
+ROI_CONFIG_FILE = "roi_config.json"
+
+def load_roi_config():
+    """Carrega ROIs salvos em disco e sobrepõe os padrões do código."""
+    if not os.path.exists(ROI_CONFIG_FILE):
+        return
+    try:
+        with open(ROI_CONFIG_FILE, 'r') as f:
+            saved = json.load(f)
+        for cam_id, cfg in saved.items():
+            if cam_id not in CAMERAS:
+                continue
+            if 'roi' in cfg:
+                CAMERAS[cam_id]['roi'] = cfg['roi']
+            if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
+                for zone_name, pts in cfg['zones'].items():
+                    CAMERAS[cam_id]['zones'][zone_name] = pts
+        print(f"[ROI] Configurações carregadas de '{ROI_CONFIG_FILE}'.")
+    except Exception as e:
+        print(f"[ROI] Erro ao carregar '{ROI_CONFIG_FILE}': {e}")
+
+def persist_roi_config():
+    """Salva o estado atual dos ROIs em disco."""
+    try:
+        data = {}
+        for cam_id, cfg in CAMERAS.items():
+            data[cam_id] = {}
+            if 'roi' in cfg:
+                data[cam_id]['roi'] = cfg['roi']
+            if 'zones' in cfg:
+                data[cam_id]['zones'] = cfg['zones']
+        with open(ROI_CONFIG_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"[ROI] Configurações persistidas em '{ROI_CONFIG_FILE}'.")
+    except Exception as e:
+        print(f"[ROI] Erro ao salvar '{ROI_CONFIG_FILE}': {e}")
+
+# Carrega ROIs salvos ao iniciar (sobrepõe os padrões acima se existir arquivo)
+load_roi_config()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ESTADO DA AUDITORIA – Câmera 02
@@ -404,10 +448,12 @@ def save_roi(cam_id):
         return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
     if zone and 'zones' in CAMERAS[cam_id]:
         CAMERAS[cam_id]['zones'][zone] = points
-        print(f"[{cam_id}] Zona '{zone}' atualizada: {points}")
+        persist_roi_config()
+        print(f"[{cam_id}] Zona '{zone}' atualizada e salva: {points}")
         return jsonify({"status": "success", "zone": zone, "roi": points})
     else:
         CAMERAS[cam_id]['roi'] = points
+        persist_roi_config()
         print(f"[{cam_id}] ROI principal salvo: {points}")
         return jsonify({"status": "success", "roi": points})
 
