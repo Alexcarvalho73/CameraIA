@@ -22,8 +22,22 @@ CAMERAS = {
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
         "rtsp_url": "rtsp://admin:013579ab@10.200.96.81:554/cam/realmonitor?channel=1&subtype=0",
-        "roi": [[100, 100], [400, 100], [400, 400], [100, 400]], # Placeholder
+        "roi": [[700, 20], [1900, 20], [1900, 1000], [700, 1000]],
+        "zones": {
+            "pickup": [[1400, 400], [1850, 400], [1850, 800], [1400, 800]],
+            "cofre": [[800, 20], [1150, 20], [1150, 300], [800, 300]],
+            "descarte": [[850, 320], [1150, 320], [1150, 600], [850, 600]]
+        },
         "type": "behavior_detection"
+    }
+}
+
+# Controle de Estados para Auditoria (Câmera 02)
+audit_state = {
+    "camera_02": {
+        "state": "IDLE",
+        "last_green_time": 0,
+        "history": []
     }
 }
 
@@ -122,23 +136,54 @@ def video_stream_thread(cam_id):
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
         
         elif cam_cfg["type"] == "behavior_detection":
-            # 1. Tentar localizar o cofre dinamicamente
-            dynamic_roi = find_cofre(frame)
-            if dynamic_roi is not None:
-                cam_cfg["roi"] = dynamic_roi.tolist()
-                roi_points = dynamic_roi
-                cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
-                cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+            from detector import detect_hand, STATE_IDLE, STATE_PICKED, STATE_COFRE, STATE_WASTE
+            
+            hands = detect_hand(frame)
+            zones = cam_cfg["zones"]
+            state_data = audit_state[cam_id]
+            
+            # Desenha as Zonas na Tela para visualização
+            for zone_name, pts in zones.items():
+                color = (255, 255, 0) if zone_name == "pickup" else (0, 255, 255)
+                if zone_name == "cofre": color = (0, 255, 0)
+                cv2.polylines(frame, [np.array(pts)], True, color, 2)
+                cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+            # Lógica de Auditoria por Mão (Luva Amarela)
+            for hand in hands:
+                hx, hy = hand['center']
                 
-                # 2. Verificar se há líquido verde caindo no cofre (dentro do ROI dinâmico)
-                detections, _ = detect_green_stain(frame, roi_points)
-                if detections:
-                    cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            else:
-                # Se não achar o cofre, usa o último ROI conhecido mas avisa
-                cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
-                cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                # 1. Detecção de Coleta (Pickup) na esteira estreita
+                if state_data["state"] == "IDLE":
+                    if cv2.pointPolygonTest(np.array(zones["pickup"]), (float(hx), float(hy)), False) >= 0:
+                        state_data["state"] = "PICKED"
+                        print(f"[{cam_id}] Auditoria: Vesícula coletada. Aguardando processamento...")
+
+                # 2. Detecção de Posicionamento no Cofre
+                elif state_data["state"] == "PICKED":
+                    if cv2.pointPolygonTest(np.array(zones["cofre"]), (float(hx), float(hy)), False) >= 0:
+                        state_data["state"] = "COFRE"
+                        print(f"[{cam_id}] Auditoria: Peça no cofre. Buscando líquido...")
+
+                # 3. Detecção de Descarte (Finalização)
+                elif state_data["state"] in ["PICKED", "COFRE"]:
+                    if cv2.pointPolygonTest(np.array(zones["descarte"]), (float(hx), float(hy)), False) >= 0:
+                        # Se foi para o descarte sem passar pelo cofre -> Alerta!
+                        if state_data["state"] == "PICKED":
+                            trigger_alert("AUDITORIA: Vesícula descartada SEM FURO!", frame, cam_id)
+                            state_data["state"] = "IDLE"
+                        else:
+                            # Passou pelo cofre, agora vamos ver se furou
+                            if time.time() - state_data.get("last_green_time", 0) > 5:
+                                trigger_alert("AUDITORIA: Vesícula no cofre MAS NÃO FUROU!", frame, cam_id)
+                            state_data["state"] = "IDLE"
+                            print(f"[{cam_id}] Auditoria: Ciclo finalizado.")
+
+            # Monitoramento constante de verde no cofre (independente da mão)
+            green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
+            if green_detections:
+                state_data["last_green_time"] = time.time()
+                cv2.putText(frame, "FURO DETECTADO OK", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         # Handle Recording
         with lock:

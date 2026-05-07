@@ -1,6 +1,34 @@
 import cv2
 import numpy as np
 
+# Estados para Auditoria da Câmera 02
+STATE_IDLE = "IDLE"
+STATE_PICKED = "PICKED"
+STATE_COFRE = "COFRE"
+STATE_BURST = "BURST"
+STATE_WASTE = "WASTE"
+
+def detect_hand(frame):
+    """Detecta a posição das luvas amarelas do operador"""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Range da luva amarela (vibrante)
+    lower_yellow = np.array([20, 100, 100])
+    upper_yellow = np.array([38, 255, 255])
+    mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
+    
+    kernel = np.ones((5,5), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    hands = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 1500: # Mão do operador tem um tamanho mínimo
+            x, y, w, h = cv2.boundingRect(cnt)
+            hands.append({'rect': (x, y, w, h), 'center': (x + w//2, y + h//2), 'area': area})
+    return hands
+
 def detect_green_stain(frame, roi_polygon):
     """
     Detects green stains within a specific ROI.
