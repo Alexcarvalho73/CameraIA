@@ -15,16 +15,15 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Strict range to avoid yellow (gloves) and focus on true green/olive bile
-    # We move the lower hue to 40 to completely skip the yellow spectrum.
-    lower_green = np.array([40, 60, 20])
+    # Reverted Hue to catch yellowish bile, but increased Saturation
+    lower_green = np.array([25, 50, 20])
     upper_green = np.array([90, 255, 255])
     
     # Create a mask for green color
     green_mask = cv2.inRange(hsv, lower_green, upper_green)
     
     # Clean up the mask (remove noise)
-    kernel = np.ones((5,5), np.uint8)
+    kernel = np.ones((7,7), np.uint8)
     green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
     green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
     
@@ -34,9 +33,28 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 600: # Increased area to avoid reflections and small spots
-            x, y, w, h = cv2.boundingRect(cnt)
-            detections.append({'rect': (x, y, w, h), 'area': area})
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        # Shape Analysis to differentiate Bile from Gloves
+        # Gloves are usually small and somewhat square/round (aspect ratio near 1.0)
+        # Bile spills are either massive or spread out (irregular aspect ratio)
+        
+        aspect_ratio = float(w) / h if h > 0 else 0
+        
+        # 1. Ignore very small noise
+        if area < 800:
+            continue
+            
+        # 2. Heuristic for Gloves vs Bile
+        # If the object is relatively small (like a hand/glove) AND has a compact shape
+        is_compact = 0.5 < aspect_ratio < 2.0
+        
+        # We consider it a "Glove" if area is under 4500 and it's compact
+        if area < 4500 and is_compact:
+            continue
+            
+        # If it passed the filters, it's a valid bile spill
+        detections.append({'rect': (x, y, w, h), 'area': area})
             
     return detections, green_mask
 
