@@ -394,23 +394,33 @@ def snapshot(cam_id):
 
 @app.route('/save_roi/<cam_id>', methods=['POST'])
 def save_roi(cam_id):
-    """Salva as coordenadas do ROI desenhado pelo usuário."""
+    """Salva ROI principal ou uma zona específica da câmera."""
     if cam_id not in CAMERAS:
         return jsonify({"status": "error", "message": "Câmera não encontrada"})
-    data = request.json
+    data   = request.json
     points = data.get('points', [])
+    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'pockets', 'work_area'
     if len(points) < 3:
         return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
-    CAMERAS[cam_id]['roi'] = points
-    print(f"[{cam_id}] Novo ROI salvo: {points}")
-    return jsonify({"status": "success", "roi": points})
+    if zone and 'zones' in CAMERAS[cam_id]:
+        CAMERAS[cam_id]['zones'][zone] = points
+        print(f"[{cam_id}] Zona '{zone}' atualizada: {points}")
+        return jsonify({"status": "success", "zone": zone, "roi": points})
+    else:
+        CAMERAS[cam_id]['roi'] = points
+        print(f"[{cam_id}] ROI principal salvo: {points}")
+        return jsonify({"status": "success", "roi": points})
 
 @app.route('/get_roi/<cam_id>')
 def get_roi(cam_id):
-    """Retorna o ROI atual da câmera."""
+    """Retorna ROI principal e todas as zonas da câmera."""
     if cam_id not in CAMERAS:
         return jsonify({"status": "error"})
-    return jsonify({"roi": CAMERAS[cam_id].get('roi', [])})
+    cam = CAMERAS[cam_id]
+    return jsonify({
+        "roi":   cam.get('roi', []),
+        "zones": cam.get('zones', {})
+    })
 
 @app.route('/roi_editor')
 def roi_editor():

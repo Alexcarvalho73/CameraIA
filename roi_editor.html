@@ -15,6 +15,7 @@
             margin-bottom: 16px; padding: 12px 16px;
             background: #161b22; border-radius: 10px; border: 1px solid #30363d;
         }
+        .toolbar label { font-size: 13px; color: #8b949e; white-space: nowrap; }
         select, button {
             padding: 8px 14px; border-radius: 6px; border: none;
             font-size: 13px; cursor: pointer; font-weight: 600;
@@ -29,16 +30,24 @@
         .btn-gray    { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
         .btn-gray:hover    { background: #30363d; }
 
+        #zone-row { display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+        #zone-row.visible { display: flex; }
+
+        .zone-badge {
+            display: inline-block; padding: 3px 10px; border-radius: 12px;
+            font-size: 11px; font-weight: 700; text-transform: uppercase;
+        }
+
         .canvas-wrap {
             position: relative; display: inline-block;
             border: 2px solid #30363d; border-radius: 10px; overflow: hidden;
-            cursor: crosshair;
+            cursor: crosshair; max-width: 100%;
         }
-        #bg-img { display: block; max-width: 100%; max-height: 70vh; }
-        #draw-canvas {
-            position: absolute; top: 0; left: 0;
-            width: 100%; height: 100%;
-        }
+        #bg-img { display: block; max-width: 100%; max-height: 68vh; }
+        #draw-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        /* Todas as zonas desenhadas em paralelo */
+        #zones-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
 
         .coords-box {
             margin-top: 14px; padding: 12px 16px;
@@ -51,152 +60,278 @@
         .tip {
             margin-top: 10px; padding: 10px 14px;
             background: rgba(31, 111, 235, 0.1); border-left: 3px solid #1f6feb;
-            border-radius: 4px; font-size: 12px; color: #8b949e;
+            border-radius: 4px; font-size: 12px; color: #8b949e; line-height: 1.5;
         }
-
         #status-msg {
             display: none; margin-top: 10px; padding: 10px 14px;
             border-radius: 6px; font-size: 13px; font-weight: 600;
         }
-        .msg-ok  { background: rgba(35, 134, 54, 0.2); border: 1px solid #238636; color: #3fb950; }
-        .msg-err { background: rgba(218, 54, 51, 0.2); border: 1px solid #da3633; color: #f85149; }
+        .msg-ok  { background: rgba(35,134,54,0.2); border: 1px solid #238636; color: #3fb950; }
+        .msg-err { background: rgba(218,54,51,0.2); border: 1px solid #da3633; color: #f85149; }
     </style>
 </head>
 <body>
 
 <h1>🎯 Editor Visual de Área de Captura (ROI)</h1>
-<p class="sub">Clique na imagem para marcar os vértices do polígono de monitoramento. Mínimo 3 pontos, clique duplo para fechar.</p>
+<p class="sub">Clique na imagem para marcar os vértices. Clique duplo para fechar o polígono.</p>
 
 <div class="toolbar">
-    <label style="font-size:13px; color:#8b949e;">Câmera:</label>
-    <select id="cam-select" onchange="loadSnapshot()">
+    <label>Câmera:</label>
+    <select id="cam-select" onchange="onCameraChange()">
         <option value="camera_01">CAM 01 – Esteira Principal</option>
         <option value="camera_02">CAM 02 – Cofre</option>
     </select>
-    <button class="btn-primary" onclick="loadSnapshot()">🔄 Atualizar Imagem</button>
-    <button class="btn-gray"    onclick="undoPoint()">↩ Desfazer Ponto</button>
-    <button class="btn-danger"  onclick="clearAll()">🗑 Limpar Tudo</button>
-    <button class="btn-success" onclick="saveROI()">💾 Salvar ROI</button>
-    <button class="btn-gray"    onclick="loadCurrentROI()">📂 Carregar ROI Atual</button>
+
+    <!-- Seletor de zona (aparece só para câmeras com zonas) -->
+    <div id="zone-row">
+        <label>Zona:</label>
+        <select id="zone-select" onchange="onZoneChange()">
+            <option value="">── ROI Principal ──</option>
+        </select>
+        <span id="zone-badge" class="zone-badge"></span>
+    </div>
+
+    <button class="btn-primary" onclick="loadSnapshot()">🔄 Capturar Imagem</button>
+    <button class="btn-gray"    onclick="undoPoint()">↩ Desfazer</button>
+    <button class="btn-danger"  onclick="clearAll()">🗑 Limpar</button>
+    <button class="btn-success" onclick="saveROI()">💾 Salvar</button>
+    <button class="btn-gray"    onclick="loadAllROIs()">📂 Ver Todas as Zonas</button>
 </div>
 
 <div class="canvas-wrap" id="canvas-wrap">
-    <img id="bg-img" src="" alt="Carregando câmera..." draggable="false">
+    <img id="bg-img" src="" alt="Carregando..." draggable="false">
+    <!-- Canvas das zonas existentes (fundo, sem interação) -->
+    <canvas id="zones-canvas"></canvas>
+    <!-- Canvas de edição (frente, com interação) -->
     <canvas id="draw-canvas"></canvas>
 </div>
 
 <div class="coords-box">
-    <h3>Coordenadas do Polígono (resolução real da câmera):</h3>
-    <div id="coords-text">Clique na imagem para iniciar...</div>
+    <h3>Coordenadas do polígono atual (resolução real da câmera):</h3>
+    <div id="coords-text">Selecione a câmera e clique na imagem para iniciar...</div>
 </div>
 
 <div class="tip">
-    💡 <b>Como usar:</b> Clique para adicionar vértices em ordem (horário ou anti-horário). Clique duplo no último ponto para fechar o polígono. Use "Salvar ROI" para aplicar imediatamente na câmera.
+    💡 <b>Câmera 01:</b> Edita o ROI principal. &nbsp;|&nbsp;
+    <b>Câmera 02:</b> Selecione a zona desejada (Cofre, Descarte, Pockets, Área de Trabalho) e edite individualmente. As outras zonas aparecem em cinza como referência.
+    <br><br>
+    🖱 <b>Clique simples</b> = adicionar ponto &nbsp;|&nbsp; <b>Clique duplo</b> = fechar polígono &nbsp;|&nbsp; "↩ Desfazer" remove o último ponto
 </div>
-
 <div id="status-msg"></div>
 
 <script>
-    const img    = document.getElementById('bg-img');
-    const canvas = document.getElementById('draw-canvas');
-    const ctx    = canvas.getContext('2d');
+    const img        = document.getElementById('bg-img');
+    const drawCanvas = document.getElementById('draw-canvas');
+    const zonesCanvas = document.getElementById('zones-canvas');
+    const ctx        = drawCanvas.getContext('2d');
+    const zctx       = zonesCanvas.getContext('2d');
 
-    let points      = [];   // coordenadas no espaço da imagem original
-    let naturalW    = 1920;
-    let naturalH    = 1080;
-    let closed      = false;
+    let points   = [];
+    let naturalW = 1920;
+    let naturalH = 1080;
+    let closed   = false;
+    let allZones = {};  // zonas carregadas do servidor
 
-    // ── Carrega o snapshot ─────────────────────────────────────────────────
-    function loadSnapshot() {
+    // Cores por zona
+    const ZONE_COLORS = {
+        cofre:     { stroke: '#00ff64', fill: 'rgba(0,255,100,0.15)' },
+        descarte:  { stroke: '#00e5ff', fill: 'rgba(0,229,255,0.12)' },
+        pockets:   { stroke: '#ff9800', fill: 'rgba(255,152,0,0.12)' },
+        work_area: { stroke: '#ffffff', fill: 'rgba(255,255,255,0.05)' },
+        roi:       { stroke: '#ffcc00', fill: 'rgba(255,204,0,0.12)' }
+    };
+
+    // ── Ao mudar câmera ──────────────────────────────────────────────────────
+    async function onCameraChange() {
+        clearAll();
+        allZones = {};
+        zctx.clearRect(0, 0, zonesCanvas.width, zonesCanvas.height);
+        await loadSnapshot();
+        await loadAllROIs();
+        populateZoneSelect();
+    }
+
+    function populateZoneSelect() {
         const camId = document.getElementById('cam-select').value;
-        closed = false;
-        points = [];
-        img.src = `/snapshot/${camId}?t=${Date.now()}`;
-        img.onload = () => {
-            naturalW = img.naturalWidth;
-            naturalH = img.naturalHeight;
-            resizeCanvas();
-            redraw();
-        };
-        img.onerror = () => {
-            document.getElementById('coords-text').textContent = '⚠ Câmera sem frame disponível. Aguarde alguns segundos e tente atualizar.';
-        };
+        const row   = document.getElementById('zone-row');
+        const sel   = document.getElementById('zone-select');
+
+        // Remove opções antigas
+        sel.innerHTML = '<option value="">── ROI Principal ──</option>';
+
+        const zoneNames = Object.keys(allZones.zones || {});
+        if (zoneNames.length > 0) {
+            row.classList.add('visible');
+            const labels = { cofre: 'Cofre (Furo)', descarte: 'Descarte', pockets: 'Cintura/Bolso', work_area: 'Área de Trabalho' };
+            zoneNames.forEach(z => {
+                const opt = document.createElement('option');
+                opt.value = z;
+                opt.textContent = labels[z] || z;
+                sel.appendChild(opt);
+            });
+        } else {
+            row.classList.remove('visible');
+        }
+        onZoneChange();
     }
 
-    function resizeCanvas() {
-        canvas.width  = img.offsetWidth;
-        canvas.height = img.offsetHeight;
+    function onZoneChange() {
+        const zone = document.getElementById('zone-select').value;
+        const badge = document.getElementById('zone-badge');
+        const colorMap = { cofre:'#00ff64', descarte:'#00e5ff', pockets:'#ff9800', work_area:'#aaa', '':'#ffcc00' };
+        badge.textContent = zone || 'ROI Principal';
+        badge.style.background = colorMap[zone] || '#ffcc00';
+        badge.style.color = '#000';
+
+        // Carrega os pontos da zona selecionada para edição
+        clearAll();
+        if (zone && allZones.zones && allZones.zones[zone]) {
+            points = JSON.parse(JSON.stringify(allZones.zones[zone]));
+            closed = points.length >= 3;
+        } else if (!zone && allZones.roi) {
+            points = JSON.parse(JSON.stringify(allZones.roi));
+            closed = points.length >= 3;
+        }
+        redraw();
+        updateCoords();
     }
 
-    // ── Converte ponto da tela → ponto na resolução real da câmera ─────────
+    // ── Carrega snapshot ao vivo ──────────────────────────────────────────────
+    function loadSnapshot() {
+        return new Promise((resolve) => {
+            const camId = document.getElementById('cam-select').value;
+            img.src = `/snapshot/${camId}?t=${Date.now()}`;
+            img.onload = () => {
+                naturalW = img.naturalWidth;
+                naturalH = img.naturalHeight;
+                resizeCanvases();
+                redrawAllZones();
+                redraw();
+                resolve();
+            };
+            img.onerror = () => {
+                document.getElementById('coords-text').textContent = '⚠ Câmera sem frame disponível. Aguarde e tente "Capturar Imagem".';
+                resolve();
+            };
+        });
+    }
+
+    // ── Carrega todos os ROIs do servidor ─────────────────────────────────────
+    async function loadAllROIs() {
+        const camId = document.getElementById('cam-select').value;
+        try {
+            const res  = await fetch(`/get_roi/${camId}`);
+            const data = await res.json();
+            allZones = data;
+            redrawAllZones();
+            populateZoneSelect();
+        } catch(e) { console.error(e); }
+    }
+
+    // ── Redimensiona ambos os canvas ─────────────────────────────────────────
+    function resizeCanvases() {
+        drawCanvas.width  = zonesCanvas.width  = img.offsetWidth;
+        drawCanvas.height = zonesCanvas.height = img.offsetHeight;
+    }
+
+    // ── Converte coordenadas ─────────────────────────────────────────────────
     function toReal(x, y) {
-        const scaleX = naturalW / img.offsetWidth;
-        const scaleY = naturalH / img.offsetHeight;
-        return [Math.round(x * scaleX), Math.round(y * scaleY)];
+        return [Math.round(x * naturalW / img.offsetWidth), Math.round(y * naturalH / img.offsetHeight)];
     }
-
-    // ── Converte ponto real → ponto na tela ────────────────────────────────
     function toScreen(rx, ry) {
-        const scaleX = img.offsetWidth  / naturalW;
-        const scaleY = img.offsetHeight / naturalH;
-        return [rx * scaleX, ry * scaleY];
+        return [rx * img.offsetWidth / naturalW, ry * img.offsetHeight / naturalH];
     }
 
-    // ── Clique simples: adiciona ponto ─────────────────────────────────────
-    canvas.addEventListener('click', (e) => {
+    // ── Eventos de clique ─────────────────────────────────────────────────────
+    drawCanvas.addEventListener('click', (e) => {
         if (closed) return;
-        const rect = canvas.getBoundingClientRect();
-        const sx = e.clientX - rect.left;
-        const sy = e.clientY - rect.top;
-        points.push(toReal(sx, sy));
+        const rect = drawCanvas.getBoundingClientRect();
+        points.push(toReal(e.clientX - rect.left, e.clientY - rect.top));
         redraw();
         updateCoords();
     });
 
-    // ── Clique duplo: fecha polígono ────────────────────────────────────────
-    canvas.addEventListener('dblclick', (e) => {
+    drawCanvas.addEventListener('dblclick', (e) => {
         e.preventDefault();
         if (points.length >= 3) { closed = true; redraw(); updateCoords(); }
     });
 
-    // ── Redesenha o canvas ─────────────────────────────────────────────────
+    // ── Desenha todas as zonas em cinza como referência ────────────────────
+    function redrawAllZones() {
+        zctx.clearRect(0, 0, zonesCanvas.width, zonesCanvas.height);
+        const selectedZone = document.getElementById('zone-select')?.value || '';
+
+        // Desenha ROI principal se não está editando ele
+        if (selectedZone !== '' && allZones.roi && allZones.roi.length >= 3) {
+            drawZone(zctx, allZones.roi, 'rgba(255,204,0,0.4)', 'rgba(255,204,0,0.06)', 'ROI');
+        }
+
+        // Desenha as zonas
+        if (allZones.zones) {
+            Object.entries(allZones.zones).forEach(([name, pts]) => {
+                if (name === selectedZone || !pts || pts.length < 3) return;
+                const c = ZONE_COLORS[name] || ZONE_COLORS.roi;
+                drawZone(zctx, pts, c.stroke + '80', c.fill.replace('0.15','0.06'), name.toUpperCase());
+            });
+        }
+    }
+
+    function drawZone(context, realPts, strokeColor, fillColor, label) {
+        const sPts = realPts.map(([rx,ry]) => toScreen(rx, ry));
+        context.beginPath();
+        context.moveTo(sPts[0][0], sPts[0][1]);
+        sPts.slice(1).forEach(([x,y]) => context.lineTo(x, y));
+        context.closePath();
+        context.fillStyle   = fillColor;
+        context.strokeStyle = strokeColor;
+        context.lineWidth   = 1.5;
+        context.setLineDash([6, 3]);
+        context.fill();
+        context.stroke();
+        context.setLineDash([]);
+        // Label
+        context.fillStyle = strokeColor;
+        context.font      = 'bold 11px sans-serif';
+        context.fillText(label, sPts[0][0] + 4, sPts[0][1] - 6);
+    }
+
+    // ── Redesenha o polígono em edição ──────────────────────────────────────
     function redraw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
         if (points.length === 0) return;
+        const zone = document.getElementById('zone-select')?.value || '';
+        const c    = ZONE_COLORS[zone] || ZONE_COLORS.roi;
+        const sPts = points.map(([rx,ry]) => toScreen(rx, ry));
 
-        const screenPts = points.map(([rx, ry]) => toScreen(rx, ry));
-
-        // Preenche o polígono com transparência
         ctx.beginPath();
-        ctx.moveTo(screenPts[0][0], screenPts[0][1]);
-        screenPts.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
+        ctx.moveTo(sPts[0][0], sPts[0][1]);
+        sPts.slice(1).forEach(([x,y]) => ctx.lineTo(x, y));
         if (closed) ctx.closePath();
-        ctx.fillStyle   = 'rgba(0, 255, 100, 0.15)';
-        ctx.strokeStyle = closed ? '#00ff64' : '#ffcc00';
-        ctx.lineWidth   = 2;
+        ctx.fillStyle   = c.fill;
+        ctx.strokeStyle = closed ? c.stroke : '#ffcc00';
+        ctx.lineWidth   = 2.5;
         ctx.fill();
         ctx.stroke();
 
-        // Desenha os pontos
-        screenPts.forEach(([x, y], i) => {
+        sPts.forEach(([x,y], i) => {
             ctx.beginPath();
             ctx.arc(x, y, 6, 0, Math.PI * 2);
-            ctx.fillStyle   = i === 0 ? '#ff4444' : '#00ff64';
+            ctx.fillStyle   = i === 0 ? '#ff4444' : c.stroke;
             ctx.fill();
             ctx.strokeStyle = 'white';
             ctx.lineWidth   = 1.5;
             ctx.stroke();
-            // Número do ponto
             ctx.fillStyle = 'white';
             ctx.font      = 'bold 11px sans-serif';
             ctx.fillText(i + 1, x + 8, y - 5);
         });
     }
 
-    // ── Atualiza o display de coordenadas ──────────────────────────────────
     function updateCoords() {
-        const formatted = '[' + points.map(p => `[${p[0]}, ${p[1]}]`).join(', ') + ']';
-        document.getElementById('coords-text').textContent = formatted;
+        const zone = document.getElementById('zone-select')?.value;
+        const label = zone ? `Zona "${zone}"` : 'ROI Principal';
+        const fmt   = '[' + points.map(p => `[${p[0]}, ${p[1]}]`).join(', ') + ']';
+        document.getElementById('coords-text').textContent = `${label}: ${fmt}`;
     }
 
     function undoPoint() {
@@ -209,61 +344,47 @@
     function clearAll() {
         closed = false;
         points = [];
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
         document.getElementById('coords-text').textContent = 'Clique na imagem para iniciar...';
     }
 
-    // ── Carrega o ROI atual da câmera e desenha ─────────────────────────────
-    async function loadCurrentROI() {
-        const camId = document.getElementById('cam-select').value;
-        try {
-            const res  = await fetch(`/get_roi/${camId}`);
-            const data = await res.json();
-            if (data.roi && data.roi.length >= 3) {
-                points = data.roi;
-                closed = true;
-                redraw();
-                updateCoords();
-                showStatus('ROI atual carregado!', 'ok');
-            }
-        } catch(e) { showStatus('Erro ao carregar ROI', 'err'); }
-    }
-
-    // ── Salva o ROI no servidor ─────────────────────────────────────────────
     async function saveROI() {
-        if (points.length < 3) {
-            showStatus('Mínimo de 3 pontos para salvar!', 'err');
-            return;
-        }
+        if (points.length < 3) { showStatus('Mínimo de 3 pontos para salvar!', 'err'); return; }
         const camId = document.getElementById('cam-select').value;
+        const zone  = document.getElementById('zone-select')?.value || null;
+        const body  = { points };
+        if (zone) body.zone = zone;
+
         try {
             const res  = await fetch(`/save_roi/${camId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ points })
+                body: JSON.stringify(body)
             });
             const data = await res.json();
             if (data.status === 'success') {
-                showStatus(`✅ ROI salvo com sucesso para ${camId}! Pontos: ${JSON.stringify(data.roi)}`, 'ok');
-            } else {
-                showStatus('Erro: ' + data.message, 'err');
-            }
+                // Atualiza allZones localmente
+                if (zone) { if (!allZones.zones) allZones.zones = {}; allZones.zones[zone] = points; }
+                else        { allZones.roi = points; }
+                redrawAllZones();
+                const label = zone ? `zona "${zone}"` : 'ROI principal';
+                showStatus(`✅ ${label.toUpperCase()} salva com sucesso em ${camId}!`, 'ok');
+            } else { showStatus('Erro: ' + data.message, 'err'); }
         } catch(e) { showStatus('Erro de conexão com o servidor.', 'err'); }
     }
 
     function showStatus(msg, type) {
         const el = document.getElementById('status-msg');
-        el.textContent  = msg;
-        el.className    = type === 'ok' ? 'msg-ok' : 'msg-err';
+        el.textContent   = msg;
+        el.className     = type === 'ok' ? 'msg-ok' : 'msg-err';
         el.style.display = 'block';
         setTimeout(() => { el.style.display = 'none'; }, 5000);
     }
 
-    // Ajusta canvas se janela redimensionar
-    window.addEventListener('resize', () => { resizeCanvas(); redraw(); });
+    window.addEventListener('resize', () => { resizeCanvases(); redrawAllZones(); redraw(); });
 
-    // Carrega a câmera ao abrir
-    loadSnapshot();
+    // Inicializa
+    onCameraChange();
 </script>
 </body>
 </html>
