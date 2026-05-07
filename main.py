@@ -150,9 +150,9 @@ def video_stream_thread(cam_id):
         elif cam_cfg["type"] == "behavior_detection":
             from detector import detect_hand, detect_operator, detect_liver, STATE_IDLE, STATE_LIVER, STATE_LEANING, STATE_PICKED, STATE_COFRE
             
-            operator = detect_operator(frame)
-            hands = detect_hand(frame)
             zones = cam_cfg["zones"]
+            operator = detect_operator(frame, np.array(zones["work_area"]))
+            hands = detect_hand(frame)
             state_data = audit_state[cam_id]
             
             # Desenha o Operador (Capacete) se detectado
