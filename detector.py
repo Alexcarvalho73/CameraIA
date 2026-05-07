@@ -35,25 +35,17 @@ def detect_green_stain(frame, roi_polygon):
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # Shape Analysis to differentiate Bile from Gloves
-        # Gloves are usually small and somewhat square/round (aspect ratio near 1.0)
-        # Bile spills are either massive or spread out (irregular aspect ratio)
+        # O filtro de aspecto (compacto) não funcionou bem porque as luvas, dependendo do ângulo, 
+        # formam retângulos longos e finos.
+        # A solução mais robusta (sem usar redes neurais pesadas para detectar a pessoa)
+        # é usar um limiar de área muito maior. Uma luva tem em média 2000 a 4000 pixels.
+        # Um vazamento de fel real se espalha pela bandeja e é muito maior.
         
-        aspect_ratio = float(w) / h if h > 0 else 0
-        
-        # 1. Ignore very small noise
-        if area < 800:
+        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 8000)
+        if area < 8000:
             continue
             
-        # 2. Heuristic for Gloves vs Bile
-        # If the object is relatively small (like a hand/glove) AND has a compact shape
-        is_compact = 0.5 < aspect_ratio < 2.0
-        
-        # We consider it a "Glove" if area is under 4500 and it's compact
-        if area < 4500 and is_compact:
-            continue
-            
-        # If it passed the filters, it's a valid bile spill
+        # Se passou do filtro de tamanho, é um vazamento grande (Fel)
         detections.append({'rect': (x, y, w, h), 'area': area})
             
     return detections, green_mask
