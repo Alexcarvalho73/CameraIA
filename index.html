@@ -331,6 +331,17 @@
                     <option value="camera_02">Câmera 02 - Comportamento</option>
                     <option value="test_feed">Modo de Teste (Upload)</option>
                 </select>
+
+                <div id="test-speed-container" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <p style="font-size: 12px; opacity: 0.5;">Velocidade do Teste</p>
+                    <select id="speed-selector" onchange="setTestSpeed(this.value)" style="width: 100%; background: transparent; color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; padding: 5px; margin-top: 5px; cursor: pointer;">
+                        <option value="0.5">0.5x (Câmera Lenta)</option>
+                        <option value="1.0" selected>1.0x (Normal)</option>
+                        <option value="2.0">2.0x (Rápido)</option>
+                        <option value="4.0">4.0x (Muito Rápido)</option>
+                        <option value="8.0">8.0x (Turbo)</option>
+                    </select>
+                </div>
             </div>
         </aside>
 
@@ -459,6 +470,21 @@
                 if (camId === 'camera_01') mainTitle.innerText = 'CAM 01 - RUPTURA';
                 else if (camId === 'camera_02') mainTitle.innerText = 'CAM 02 - COMPORTAMENTO';
                 else if (camId === 'test_feed') mainTitle.innerText = 'MODO DE TESTE (VÍDEO LOCAL)';
+                
+                // Show speed controller only in test mode
+                document.getElementById('test-speed-container').style.display = (camId === 'test_feed') ? 'block' : 'none';
+            }
+        }
+
+        async function setTestSpeed(speedValue) {
+            try {
+                await fetch('/set_test_speed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ speed: speedValue })
+                });
+            } catch (err) {
+                console.error("Erro ao alterar velocidade:", err);
             }
         }
 

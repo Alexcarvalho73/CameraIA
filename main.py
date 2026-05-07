@@ -39,8 +39,8 @@ recording_states = {} # cam_id: VideoWriter or None
 lock = threading.Lock()
 
 # Test Video State
-test_video_active = False
 test_video_rule = None
+test_video_speed = 1.0
 
 def load_existing_alerts():
     global alert_history
@@ -224,9 +224,10 @@ def video_feed(cam_id):
         
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0: fps = 25.0
-        frame_delay = 1.0 / fps
         
         while cap.isOpened():
+            # Atualiza o delay por frame baseado na velocidade global configurada
+            frame_delay = 1.0 / (fps * test_video_speed)
             start_time = time.time()
             ret, frame = cap.read()
             if not ret:
@@ -331,6 +332,14 @@ def upload_video():
         test_video_rule = rule
         
         return jsonify({"status": "success"})
+
+@app.route('/set_test_speed', methods=['POST'])
+def set_test_speed():
+    global test_video_speed
+    data = request.json
+    speed = data.get('speed', 1.0)
+    test_video_speed = float(speed)
+    return jsonify({"status": "success", "speed": test_video_speed})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
