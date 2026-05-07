@@ -15,12 +15,19 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Reverted Hue to catch yellowish bile, but increased Saturation
-    lower_green = np.array([20, 50, 20])
-    upper_green = np.array([90, 255, 255])
+    # Range amplo para pegar fel (do amarelo-oliva ao verde)
+    lower_full = np.array([20, 50, 20])
+    upper_full = np.array([90, 255, 255])
+    full_mask = cv2.inRange(hsv, lower_full, upper_full)
     
-    # Create a mask for green color
-    green_mask = cv2.inRange(hsv, lower_green, upper_green)
+    # Inibição específica da Luva Amarela (Amarelo vibrante/fluorescente)
+    # As luvas têm saturação e brilho (Value) muito altos comparados ao fel
+    lower_yellow_glove = np.array([22, 160, 150])
+    upper_yellow_glove = np.array([35, 255, 255])
+    glove_mask = cv2.inRange(hsv, lower_yellow_glove, upper_yellow_glove)
+    
+    # Remove a cor da luva da detecção principal
+    green_mask = cv2.subtract(full_mask, glove_mask)
     
     # Clean up the mask (remove noise)
     kernel = np.ones((7,7), np.uint8)
