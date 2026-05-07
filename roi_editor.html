@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editor de Área (ROI) - Visão IA</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+        h1 { font-size: 20px; margin-bottom: 6px; color: #58a6ff; }
+        p.sub { font-size: 13px; color: #8b949e; margin-bottom: 16px; }
+
+        .toolbar {
+            display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+            margin-bottom: 16px; padding: 12px 16px;
+            background: #161b22; border-radius: 10px; border: 1px solid #30363d;
+        }
+        select, button {
+            padding: 8px 14px; border-radius: 6px; border: none;
+            font-size: 13px; cursor: pointer; font-weight: 600;
+        }
+        select { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+        .btn-primary { background: #1f6feb; color: white; }
+        .btn-primary:hover { background: #388bfd; }
+        .btn-danger  { background: #da3633; color: white; }
+        .btn-danger:hover  { background: #f85149; }
+        .btn-success { background: #238636; color: white; }
+        .btn-success:hover { background: #2ea043; }
+        .btn-gray    { background: #21262d; color: #c9d1d9; border: 1px solid #30363d; }
+        .btn-gray:hover    { background: #30363d; }
+
+        .canvas-wrap {
+            position: relative; display: inline-block;
+            border: 2px solid #30363d; border-radius: 10px; overflow: hidden;
+            cursor: crosshair;
+        }
+        #bg-img { display: block; max-width: 100%; max-height: 70vh; }
+        #draw-canvas {
+            position: absolute; top: 0; left: 0;
+            width: 100%; height: 100%;
+        }
+
+        .coords-box {
+            margin-top: 14px; padding: 12px 16px;
+            background: #161b22; border-radius: 10px; border: 1px solid #30363d;
+            font-family: monospace; font-size: 13px;
+        }
+        .coords-box h3 { font-size: 13px; color: #8b949e; margin-bottom: 8px; }
+        #coords-text { color: #58a6ff; word-break: break-all; }
+
+        .tip {
+            margin-top: 10px; padding: 10px 14px;
+            background: rgba(31, 111, 235, 0.1); border-left: 3px solid #1f6feb;
+            border-radius: 4px; font-size: 12px; color: #8b949e;
+        }
+
+        #status-msg {
+            display: none; margin-top: 10px; padding: 10px 14px;
+            border-radius: 6px; font-size: 13px; font-weight: 600;
+        }
+        .msg-ok  { background: rgba(35, 134, 54, 0.2); border: 1px solid #238636; color: #3fb950; }
+        .msg-err { background: rgba(218, 54, 51, 0.2); border: 1px solid #da3633; color: #f85149; }
+    </style>
+</head>
+<body>
+
+<h1>🎯 Editor Visual de Área de Captura (ROI)</h1>
+<p class="sub">Clique na imagem para marcar os vértices do polígono de monitoramento. Mínimo 3 pontos, clique duplo para fechar.</p>
+
+<div class="toolbar">
+    <label style="font-size:13px; color:#8b949e;">Câmera:</label>
+    <select id="cam-select" onchange="loadSnapshot()">
+        <option value="camera_01">CAM 01 – Esteira Principal</option>
+        <option value="camera_02">CAM 02 – Cofre</option>
+    </select>
+    <button class="btn-primary" onclick="loadSnapshot()">🔄 Atualizar Imagem</button>
+    <button class="btn-gray"    onclick="undoPoint()">↩ Desfazer Ponto</button>
+    <button class="btn-danger"  onclick="clearAll()">🗑 Limpar Tudo</button>
+    <button class="btn-success" onclick="saveROI()">💾 Salvar ROI</button>
+    <button class="btn-gray"    onclick="loadCurrentROI()">📂 Carregar ROI Atual</button>
+</div>
+
+<div class="canvas-wrap" id="canvas-wrap">
+    <img id="bg-img" src="" alt="Carregando câmera..." draggable="false">
+    <canvas id="draw-canvas"></canvas>
+</div>
+
+<div class="coords-box">
+    <h3>Coordenadas do Polígono (resolução real da câmera):</h3>
+    <div id="coords-text">Clique na imagem para iniciar...</div>
+</div>
+
+<div class="tip">
+    💡 <b>Como usar:</b> Clique para adicionar vértices em ordem (horário ou anti-horário). Clique duplo no último ponto para fechar o polígono. Use "Salvar ROI" para aplicar imediatamente na câmera.
+</div>
+
+<div id="status-msg"></div>
+
+<script>
+    const img    = document.getElementById('bg-img');
+    const canvas = document.getElementById('draw-canvas');
+    const ctx    = canvas.getContext('2d');
+
+    let points      = [];   // coordenadas no espaço da imagem original
+    let naturalW    = 1920;
+    let naturalH    = 1080;
+    let closed      = false;
+
+    // ── Carrega o snapshot ─────────────────────────────────────────────────
+    function loadSnapshot() {
+        const camId = document.getElementById('cam-select').value;
+        closed = false;
+        points = [];
+        img.src = `/snapshot/${camId}?t=${Date.now()}`;
+        img.onload = () => {
+            naturalW = img.naturalWidth;
+            naturalH = img.naturalHeight;
+            resizeCanvas();
+            redraw();
+        };
+        img.onerror = () => {
+            document.getElementById('coords-text').textContent = '⚠ Câmera sem frame disponível. Aguarde alguns segundos e tente atualizar.';
+        };
+    }
+
+    function resizeCanvas() {
+        canvas.width  = img.offsetWidth;
+        canvas.height = img.offsetHeight;
+    }
+
+    // ── Converte ponto da tela → ponto na resolução real da câmera ─────────
+    function toReal(x, y) {
+        const scaleX = naturalW / img.offsetWidth;
+        const scaleY = naturalH / img.offsetHeight;
+        return [Math.round(x * scaleX), Math.round(y * scaleY)];
+    }
+
+    // ── Converte ponto real → ponto na tela ────────────────────────────────
+    function toScreen(rx, ry) {
+        const scaleX = img.offsetWidth  / naturalW;
+        const scaleY = img.offsetHeight / naturalH;
+        return [rx * scaleX, ry * scaleY];
+    }
+
+    // ── Clique simples: adiciona ponto ─────────────────────────────────────
+    canvas.addEventListener('click', (e) => {
+        if (closed) return;
+        const rect = canvas.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        points.push(toReal(sx, sy));
+        redraw();
+        updateCoords();
+    });
+
+    // ── Clique duplo: fecha polígono ────────────────────────────────────────
+    canvas.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        if (points.length >= 3) { closed = true; redraw(); updateCoords(); }
+    });
+
+    // ── Redesenha o canvas ─────────────────────────────────────────────────
+    function redraw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (points.length === 0) return;
+
+        const screenPts = points.map(([rx, ry]) => toScreen(rx, ry));
+
+        // Preenche o polígono com transparência
+        ctx.beginPath();
+        ctx.moveTo(screenPts[0][0], screenPts[0][1]);
+        screenPts.slice(1).forEach(([x, y]) => ctx.lineTo(x, y));
+        if (closed) ctx.closePath();
+        ctx.fillStyle   = 'rgba(0, 255, 100, 0.15)';
+        ctx.strokeStyle = closed ? '#00ff64' : '#ffcc00';
+        ctx.lineWidth   = 2;
+        ctx.fill();
+        ctx.stroke();
+
+        // Desenha os pontos
+        screenPts.forEach(([x, y], i) => {
+            ctx.beginPath();
+            ctx.arc(x, y, 6, 0, Math.PI * 2);
+            ctx.fillStyle   = i === 0 ? '#ff4444' : '#00ff64';
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth   = 1.5;
+            ctx.stroke();
+            // Número do ponto
+            ctx.fillStyle = 'white';
+            ctx.font      = 'bold 11px sans-serif';
+            ctx.fillText(i + 1, x + 8, y - 5);
+        });
+    }
+
+    // ── Atualiza o display de coordenadas ──────────────────────────────────
+    function updateCoords() {
+        const formatted = '[' + points.map(p => `[${p[0]}, ${p[1]}]`).join(', ') + ']';
+        document.getElementById('coords-text').textContent = formatted;
+    }
+
+    function undoPoint() {
+        closed = false;
+        points.pop();
+        redraw();
+        updateCoords();
+    }
+
+    function clearAll() {
+        closed = false;
+        points = [];
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        document.getElementById('coords-text').textContent = 'Clique na imagem para iniciar...';
+    }
+
+    // ── Carrega o ROI atual da câmera e desenha ─────────────────────────────
+    async function loadCurrentROI() {
+        const camId = document.getElementById('cam-select').value;
+        try {
+            const res  = await fetch(`/get_roi/${camId}`);
+            const data = await res.json();
+            if (data.roi && data.roi.length >= 3) {
+                points = data.roi;
+                closed = true;
+                redraw();
+                updateCoords();
+                showStatus('ROI atual carregado!', 'ok');
+            }
+        } catch(e) { showStatus('Erro ao carregar ROI', 'err'); }
+    }
+
+    // ── Salva o ROI no servidor ─────────────────────────────────────────────
+    async function saveROI() {
+        if (points.length < 3) {
+            showStatus('Mínimo de 3 pontos para salvar!', 'err');
+            return;
+        }
+        const camId = document.getElementById('cam-select').value;
+        try {
+            const res  = await fetch(`/save_roi/${camId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ points })
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                showStatus(`✅ ROI salvo com sucesso para ${camId}! Pontos: ${JSON.stringify(data.roi)}`, 'ok');
+            } else {
+                showStatus('Erro: ' + data.message, 'err');
+            }
+        } catch(e) { showStatus('Erro de conexão com o servidor.', 'err'); }
+    }
+
+    function showStatus(msg, type) {
+        const el = document.getElementById('status-msg');
+        el.textContent  = msg;
+        el.className    = type === 'ok' ? 'msg-ok' : 'msg-err';
+        el.style.display = 'block';
+        setTimeout(() => { el.style.display = 'none'; }, 5000);
+    }
+
+    // Ajusta canvas se janela redimensionar
+    window.addEventListener('resize', () => { resizeCanvas(); redraw(); });
+
+    // Carrega a câmera ao abrir
+    loadSnapshot();
+</script>
+</body>
+</html>

@@ -376,6 +376,48 @@ def handle_config():
         return jsonify({"status": "success", "config": CONFIG})
     return jsonify(CONFIG)
 
+@app.route('/snapshot/<cam_id>')
+def snapshot(cam_id):
+    """Retorna um frame único da câmera como JPEG para o editor de ROI."""
+    with lock:
+        frame = latest_frames.get(cam_id)
+    if frame is None:
+        return "Câmera sem frame disponível", 503
+    flag, enc = cv2.imencode('.jpg', frame)
+    if not flag:
+        return "Erro ao codificar frame", 500
+    from flask import make_response
+    resp = make_response(enc.tobytes())
+    resp.headers['Content-Type'] = 'image/jpeg'
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+@app.route('/save_roi/<cam_id>', methods=['POST'])
+def save_roi(cam_id):
+    """Salva as coordenadas do ROI desenhado pelo usuário."""
+    if cam_id not in CAMERAS:
+        return jsonify({"status": "error", "message": "Câmera não encontrada"})
+    data = request.json
+    points = data.get('points', [])
+    if len(points) < 3:
+        return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
+    CAMERAS[cam_id]['roi'] = points
+    print(f"[{cam_id}] Novo ROI salvo: {points}")
+    return jsonify({"status": "success", "roi": points})
+
+@app.route('/get_roi/<cam_id>')
+def get_roi(cam_id):
+    """Retorna o ROI atual da câmera."""
+    if cam_id not in CAMERAS:
+        return jsonify({"status": "error"})
+    return jsonify({"roi": CAMERAS[cam_id].get('roi', [])})
+
+@app.route('/roi_editor')
+def roi_editor():
+    """Página do editor visual de ROI."""
+    return send_from_directory('.', 'roi_editor.html')
+
+
 @app.route('/set_test_speed', methods=['POST'])
 def set_test_speed():
     global test_video_speed
