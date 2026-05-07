@@ -15,9 +15,9 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Adjusted range to avoid yellow (gloves) and keep the green/brown bile
-    # We move the lower hue to 30 to skip pure yellow/orange.
-    lower_green = np.array([30, 40, 20])
+    # Strict range to avoid yellow (gloves) and focus on true green/olive bile
+    # We move the lower hue to 40 to completely skip the yellow spectrum.
+    lower_green = np.array([40, 60, 20])
     upper_green = np.array([90, 255, 255])
     
     # Create a mask for green color
