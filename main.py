@@ -143,7 +143,9 @@ def video_stream_thread(cam_id):
         # Handle Recording
         with lock:
             if cam_id in recording_states and recording_states[cam_id]:
-                recording_states[cam_id].write(frame)
+                # Redimensiona para WhatsApp antes de gravar
+                resized = cv2.resize(frame, (640, 360))
+                recording_states[cam_id].write(resized)
 
         # Draw ROI lines
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
@@ -194,10 +196,9 @@ def trigger_alert(message, frame, cam_id):
             if cam_id not in recording_states or not recording_states[cam_id]:
                 vid_filename = f"event_{cam_id}_{timestamp}.mp4"
                 vid_filepath = os.path.join("alerts", vid_filename)
-                # MP4V codec is more compatible with modern browsers
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                h, w = frame.shape[:2]
-                out = cv2.VideoWriter(vid_filepath, fourcc, 20.0, (w, h))
+                # Resolução reduzida para compatibilidade com WhatsApp (640x360)
+                out = cv2.VideoWriter(vid_filepath, fourcc, 20.0, (640, 360))
                 recording_states[cam_id] = out
                 alert_data["video_url"] = f"/alerts_files/{vid_filename}"
                 threading.Thread(target=auto_stop_recording, args=(cam_id, vid_filename), daemon=True).start()
@@ -302,7 +303,8 @@ def video_feed(cam_id):
             # Gravação automática no modo de teste
             with lock:
                 if "test_feed" in recording_states and recording_states["test_feed"]:
-                    recording_states["test_feed"].write(frame)
+                    resized_test = cv2.resize(frame, (640, 360))
+                    recording_states["test_feed"].write(resized_test)
                 
             elapsed = time.time() - start_time
             time_debt += elapsed - target_delay
@@ -331,13 +333,12 @@ def start_record(cam_id):
             return jsonify({"status": "error", "message": "Already recording"})
         
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename = f"record_{cam_id}_{timestamp}.avi"
+        filename = f"record_{cam_id}_{timestamp}.mp4"
         filepath = os.path.join("alerts", filename)
         
         # Define codec and create VideoWriter object
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        h, w = latest_frames[cam_id].shape[:2]
-        out = cv2.VideoWriter(filepath, fourcc, 20.0, (w, h))
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
         recording_states[cam_id] = out
         
     return jsonify({"status": "success", "filename": filename})
