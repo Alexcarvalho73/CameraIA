@@ -225,13 +225,24 @@ def video_feed(cam_id):
         fps = cap.get(cv2.CAP_PROP_FPS)
         if fps <= 0: fps = 25.0
         
+        time_debt = 0.0
+        
         while cap.isOpened():
-            # Atualiza o delay por frame baseado na velocidade global configurada
-            frame_delay = 1.0 / (fps * test_video_speed)
+            target_delay = 1.0 / (fps * test_video_speed)
             start_time = time.time()
+            
+            # Se o processamento estiver lento ou a velocidade for > 1x, pulamos frames
+            if time_debt > target_delay:
+                frames_to_skip = int(time_debt / target_delay)
+                frames_to_skip = min(frames_to_skip, int(fps)) # Pula no máximo 1s de vídeo para não travar
+                for _ in range(frames_to_skip):
+                    cap.grab()
+                time_debt -= frames_to_skip * target_delay
+                
             ret, frame = cap.read()
             if not ret:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop do video
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop infinito do teste
+                time_debt = 0.0
                 continue
                 
             roi_points = np.array(cam_cfg["roi"], np.int32)
@@ -267,9 +278,13 @@ def video_feed(cam_id):
                 yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + encodedImage.tobytes() + b'\r\n\r\n')
                 
             elapsed = time.time() - start_time
-            sleep_time = frame_delay - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            time_debt += elapsed - target_delay
+            
+            if time_debt < 0:
+                # Processamos mais rápido, então dormimos a diferença exata
+                sleep_sec = -time_debt
+                time.sleep(sleep_sec)
+                time_debt = 0.0
 
         cap.release()
 
