@@ -145,56 +145,84 @@ def video_stream_thread(cam_id):
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
         
         elif cam_cfg["type"] == "behavior_detection":
-            from detector import detect_hand, STATE_IDLE, STATE_PICKED, STATE_COFRE, STATE_WASTE
+            from detector import detect_hand, detect_operator, detect_liver, STATE_IDLE, STATE_LIVER, STATE_LEANING, STATE_PICKED, STATE_COFRE
             
+            operator = detect_operator(frame)
             hands = detect_hand(frame)
             zones = cam_cfg["zones"]
             state_data = audit_state[cam_id]
             
-            # Desenha as Zonas na Tela para visualização
+            # Desenha o Operador (Capacete) se detectado
+            if operator:
+                ox, oy = operator['center']
+                cv2.circle(frame, (ox, oy), 20, (255, 255, 255), 2)
+                cv2.putText(frame, "OPERADOR", (ox-30, oy-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+            # Desenha as Zonas na Tela
             for zone_name, pts in zones.items():
                 color = (255, 255, 0) if zone_name == "pickup" else (0, 255, 255)
                 if zone_name == "cofre": color = (0, 255, 0)
                 cv2.polylines(frame, [np.array(pts)], True, color, 2)
                 cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-            # Lógica de Auditoria por Mão (Luva Amarela)
-            for hand in hands:
-                hx, hy = hand['center']
+            # LÓGICA DE AUDITORIA POR COMPORTAMENTO (ESTADOS)
+            
+            # 1. Aguardando Fígado na Esteira
+            if state_data["state"] == "IDLE":
+                if detect_liver(frame, np.array(zones["pickup"])):
+                    state_data["state"] = "LIVER_READY"
+                    add_audit_log("Fígado detectado na esteira. Aguardando operador...")
+
+            # 2. Detecção de Inclinação (Debruçar)
+            elif state_data["state"] == "LIVER_READY":
+                if operator and operator['center'][0] > 1200: # Se inclinou para a direita (esteira)
+                    state_data["state"] = "LEANING"
+                    add_audit_log("Operador se inclinou para coleta (Debruçar).")
+
+            # 3. Coleta e Início do Giro
+            elif state_data["state"] == "LEANING":
+                # Verifica se a mão esteve na zona de pickup durante a inclinação
+                hand_in_pickup = any(cv2.pointPolygonTest(np.array(zones["pickup"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                if hand_in_pickup:
+                    state_data["state"] = "PICKED"
+                    add_audit_log("Peça coletada. Detectando movimento de giro...")
+                elif operator and operator['center'][0] < 1100: # Voltou sem pegar nada
+                    state_data["state"] = "IDLE"
+
+            # 4. Chegada ao Cofre
+            elif state_data["state"] == "PICKED":
+                if operator and operator['center'][1] < 400: # Subiu em direção ao topo (cofre)
+                    state_data["state"] = "COFRE"
+                    add_audit_log("Posicionado no cofre. Validando furo...")
                 
-                # 1. Detecção de Coleta (Pickup) na esteira estreita
-                if state_data["state"] == "IDLE":
-                    if cv2.pointPolygonTest(np.array(zones["pickup"]), (float(hx), float(hy)), False) >= 0:
-                        state_data["state"] = "PICKED"
-                        add_audit_log("Mão na Esteira: Coletando vesícula...")
+                # Se for direto para o descarte sem passar pelo cofre -> Alerta
+                descarte_detected = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                if descarte_detected:
+                    msg = "ALERTA: Descarte direto SEM passar pelo cofre!"
+                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                    add_audit_log(msg)
+                    state_data["state"] = "IDLE"
 
-                # 2. Detecção de Posicionamento no Cofre
-                elif state_data["state"] == "PICKED":
-                    if cv2.pointPolygonTest(np.array(zones["cofre"]), (float(hx), float(hy)), False) >= 0:
-                        state_data["state"] = "COFRE"
-                        add_audit_log("Peça no Cofre: Aguardando furo...")
+            # 5. Finalização no Descarte
+            elif state_data["state"] == "COFRE":
+                descarte_detected = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                if descarte_detected:
+                    if time.time() - state_data.get("last_green_time", 0) > 8:
+                        msg = "ALERTA: Passou pelo cofre mas NÃO FUROU!"
+                        trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                        add_audit_log(msg)
+                    else:
+                        add_audit_log("Ciclo de Auditoria Concluído com Sucesso.")
+                    state_data["state"] = "IDLE"
 
-                # 3. Detecção de Descarte (Finalização)
-                elif state_data["state"] in ["PICKED", "COFRE"]:
-                    if cv2.pointPolygonTest(np.array(zones["descarte"]), (float(hx), float(hy)), False) >= 0:
-                        # Se foi para o descarte sem passar pelo cofre -> Alerta!
-                        if state_data["state"] == "PICKED":
-                            msg = "ALERTA: Descartado SEM passar pelo cofre!"
-                            trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                            add_audit_log(msg)
-                            state_data["state"] = "IDLE"
-                        else:
-                            # Passou pelo cofre, agora vamos ver se furou
-                            if time.time() - state_data.get("last_green_time", 0) > 6:
-                                msg = "ALERTA: Passou pelo cofre mas NÃO FUROU!"
-                                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                                add_audit_log(msg)
-                            else:
-                                add_audit_log("Ciclo Concluído: Furo e Descarte OK.")
-                            state_data["state"] = "IDLE"
+            # Monitoramento constante de verde no cofre
+            green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
+            if green_detections:
+                state_data["last_green_time"] = time.time()
+                cv2.putText(frame, "FURO OK", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
             # Desenha o Estado Atual na Tela
-            cv2.putText(frame, f"STATUS: {state_data['state']}", (750, 1000), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(frame, f"AUDITORIA: {state_data['state']}", (700, 1050), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
             # Monitoramento constante de verde no cofre (independente da mão)
             green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))

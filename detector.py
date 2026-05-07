@@ -3,10 +3,48 @@ import numpy as np
 
 # Estados para Auditoria da Câmera 02
 STATE_IDLE = "IDLE"
+STATE_LIVER = "LIVER_READY"
+STATE_LEANING = "LEANING"  # Debruçado sobre a esteira
 STATE_PICKED = "PICKED"
 STATE_COFRE = "COFRE"
-STATE_BURST = "BURST"
 STATE_WASTE = "WASTE"
+
+def detect_operator(frame):
+    """Detecta o capacete branco do operador para rastrear inclinação"""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Branco (Capacete)
+    lower_white = np.array([0, 0, 200])
+    upper_white = np.array([180, 40, 255])
+    mask = cv2.inRange(hsv, lower_white, upper_white)
+    
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 1000 and area < 8000: # Tamanho típico de um capacete visto de cima
+            x, y, w, h = cv2.boundingRect(cnt)
+            # Verifica se é aproximadamente circular
+            if 0.7 < (w/h) < 1.3:
+                return {'center': (x + w//2, y + h//2), 'rect': (x, y, w, h)}
+    return None
+
+def detect_liver(frame, roi_points):
+    """Detecta a presença de fígado (carne escura) na zona de coleta"""
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask, [roi_points], 255)
+    
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Vermelho Escuro / Roxo (Fígado)
+    lower1 = np.array([0, 30, 20])
+    upper1 = np.array([15, 150, 100])
+    lower2 = np.array([150, 30, 20])
+    upper2 = np.array([180, 150, 100])
+    
+    m1 = cv2.inRange(hsv, lower1, upper1)
+    m2 = cv2.inRange(hsv, lower2, upper2)
+    mask_liver = cv2.bitwise_and(cv2.bitwise_or(m1, m2), mask)
+    
+    area = np.sum(mask_liver > 0)
+    return area > 5000 # Retorna True se houver massa de fígado significativa
 
 def detect_hand(frame):
     """Detecta a posição das luvas amarelas do operador"""
