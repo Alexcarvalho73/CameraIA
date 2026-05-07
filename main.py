@@ -325,18 +325,40 @@ def video_feed(cam_id):
                     trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
             
             elif cam_cfg["type"] == "behavior_detection":
-                dynamic_roi = find_cofre(frame)
-                if dynamic_roi is not None:
-                    cam_cfg["roi"] = dynamic_roi.tolist()
-                    roi_points = dynamic_roi
-                    cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
-                    cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-                    detections, _ = detect_green_stain(frame, roi_points)
-                    if detections:
-                        cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                else:
-                    cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
-                    cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                from detector import detect_hand, STATE_IDLE, STATE_PICKED, STATE_COFRE, STATE_WASTE
+                
+                hands = detect_hand(frame)
+                zones = cam_cfg["zones"]
+                # No modo teste, usamos um estado separado para não bagunçar o real
+                if "test_audit" not in audit_state:
+                    audit_state["test_audit"] = {"state": "IDLE", "last_green_time": 0}
+                state_data = audit_state["test_audit"]
+                
+                # Desenha as Zonas na Tela
+                for zone_name, pts in zones.items():
+                    color = (255, 255, 0) if zone_name == "pickup" else (0, 255, 255)
+                    if zone_name == "cofre": color = (0, 255, 0)
+                    cv2.polylines(frame, [np.array(pts)], True, color, 2)
+                    cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+                for hand in hands:
+                    hx, hy = hand['center']
+                    if state_data["state"] == "IDLE":
+                        if cv2.pointPolygonTest(np.array(zones["pickup"]), (float(hx), float(hy)), False) >= 0:
+                            state_data["state"] = "PICKED"
+                    elif state_data["state"] == "PICKED":
+                        if cv2.pointPolygonTest(np.array(zones["cofre"]), (float(hx), float(hy)), False) >= 0:
+                            state_data["state"] = "COFRE"
+                    elif state_data["state"] in ["PICKED", "COFRE"]:
+                        if cv2.pointPolygonTest(np.array(zones["descarte"]), (float(hx), float(hy)), False) >= 0:
+                            if state_data["state"] == "PICKED":
+                                trigger_alert("[TESTE] AUDITORIA: Descarte SEM FURO!", frame, "test_feed")
+                            state_data["state"] = "IDLE"
+
+                green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
+                if green_detections:
+                    state_data["last_green_time"] = time.time()
+                    cv2.putText(frame, "FURO DETECTADO OK", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
             cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
             cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
