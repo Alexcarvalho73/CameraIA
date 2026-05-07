@@ -371,40 +371,61 @@ def video_feed(cam_id):
                     trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
             
             elif cam_cfg["type"] == "behavior_detection":
-                from detector import detect_hand, STATE_IDLE, STATE_PICKED, STATE_COFRE, STATE_WASTE
+                from detector import detect_hand, detect_operator, detect_liver, STATE_IDLE
                 
-                hands = detect_hand(frame)
-                zones = cam_cfg["zones"]
                 # No modo teste, usamos um estado separado para não bagunçar o real
                 if "test_audit" not in audit_state:
-                    audit_state["test_audit"] = {"state": "IDLE", "last_green_time": 0}
+                    audit_state["test_audit"] = {
+                        "process_active": False,
+                        "last_furo_time": 0,
+                        "hand_in_cofre_since": 0,
+                        "last_helmet_y": 0
+                    }
                 state_data = audit_state["test_audit"]
+                zones = cam_cfg["zones"]
                 
+                operator = detect_operator(frame, np.array(zones["work_area"]))
+                hands = detect_hand(frame)
+                
+                # Desenha o Operador se detectado
+                if operator:
+                    cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
+
                 # Desenha as Zonas na Tela
                 for zone_name, pts in zones.items():
-                    color = (255, 255, 0) if zone_name == "pickup" else (0, 255, 255)
-                    if zone_name == "cofre": color = (0, 255, 0)
-                    cv2.polylines(frame, [np.array(pts)], True, color, 2)
-                    cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                    cv2.polylines(frame, [np.array(pts)], True, (255, 255, 0), 2)
+                    cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-                for hand in hands:
-                    hx, hy = hand['center']
-                    if state_data["state"] == "IDLE":
-                        if cv2.pointPolygonTest(np.array(zones["pickup"]), (float(hx), float(hy)), False) >= 0:
-                            state_data["state"] = "PICKED"
-                    elif state_data["state"] == "PICKED":
-                        if cv2.pointPolygonTest(np.array(zones["cofre"]), (float(hx), float(hy)), False) >= 0:
-                            state_data["state"] = "COFRE"
-                    elif state_data["state"] in ["PICKED", "COFRE"]:
-                        if cv2.pointPolygonTest(np.array(zones["descarte"]), (float(hx), float(hy)), False) >= 0:
-                            if state_data["state"] == "PICKED":
-                                trigger_alert("[TESTE] AUDITORIA: Descarte SEM FURO!", frame, "test_feed")
-                            state_data["state"] = "IDLE"
-
+                # Monitoramento de Verde (Gatilho)
                 green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
                 if green_detections:
-                    state_data["last_green_time"] = time.time()
+                    if not state_data["process_active"]:
+                        state_data["process_active"] = True
+                        add_audit_log("[TESTE] PROCESSO INICIADO.")
+                    state_data["last_furo_time"] = time.time()
                     cv2.putText(frame, "FURO DETECTADO OK", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # Heurística 1: Bolso
+                hand_in_pocket = any(cv2.pointPolygonTest(np.array(zones["pockets"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                if hand_in_pocket:
+                    add_audit_log("[TESTE] ANOMALIA: Mão na cintura!")
+                    trigger_alert("[TESTE] Auditoria: Mão na cintura!", frame, "test_feed")
+
+                # Heurística 2: Manipulação
+                hand_in_cofre = any(cv2.pointPolygonTest(np.array(zones["cofre"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                if hand_in_cofre:
+                    if state_data["hand_in_cofre_since"] == 0: state_data["hand_in_cofre_since"] = time.time()
+                    elif time.time() - state_data["hand_in_cofre_since"] > 4:
+                        add_audit_log("[TESTE] ANOMALIA: Manipulação prolongada!")
+                        trigger_alert("[TESTE] Auditoria: Manipulação!", frame, "test_feed")
+                        state_data["hand_in_cofre_since"] = time.time()
+                else:
+                    state_data["hand_in_cofre_since"] = 0
+
+                # Heurística 4: Abandono / Finalização
+                if state_data["process_active"] and time.time() - state_data["last_furo_time"] > 10:
+                    state_data["process_active"] = False
+                    add_audit_log("[TESTE] Ciclo de auditoria encerrado.")
 
             cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
             cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
