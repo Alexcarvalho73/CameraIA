@@ -28,7 +28,7 @@ CAMERAS = {
 }
 
 CONFIG = {
-    "alert_cooldown": 5,
+    "alert_cooldown": 10,
     "last_alert_time": {} # Store per camera
 }
 
@@ -181,6 +181,28 @@ def trigger_alert(message, frame, cam_id):
         
         print(f"ALERT SAVED [{cam_id}]: {message} -> {filepath}")
         
+        # Iniciar gravação automática de 10 segundos
+        def auto_stop_recording(cid, vid_name):
+            time.sleep(10)
+            with lock:
+                if cid in recording_states and recording_states[cid]:
+                    recording_states[cid].release()
+                    recording_states[cid] = None
+                    print(f"AUTO-RECORD STOPPED for {cid}: {vid_name}")
+
+        with lock:
+            if cam_id not in recording_states or not recording_states[cam_id]:
+                vid_filename = f"event_{cam_id}_{timestamp}.mp4"
+                vid_filepath = os.path.join("alerts", vid_filename)
+                # MP4V codec is more compatible with modern browsers
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                h, w = frame.shape[:2]
+                out = cv2.VideoWriter(vid_filepath, fourcc, 20.0, (w, h))
+                recording_states[cam_id] = out
+                alert_data["video_url"] = f"/alerts_files/{vid_filename}"
+                threading.Thread(target=auto_stop_recording, args=(cam_id, vid_filename), daemon=True).start()
+                print(f"AUTO-RECORD STARTED for {cam_id}: {vid_filename}")
+        
         # WhatsApp integration placeholder
         try:
             pass
@@ -276,6 +298,11 @@ def video_feed(cam_id):
             (flag, encodedImage) = cv2.imencode(".jpg", frame)
             if flag:
                 yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + encodedImage.tobytes() + b'\r\n\r\n')
+            
+            # Gravação automática no modo de teste
+            with lock:
+                if "test_feed" in recording_states and recording_states["test_feed"]:
+                    recording_states["test_feed"].write(frame)
                 
             elapsed = time.time() - start_time
             time_debt += elapsed - target_delay
