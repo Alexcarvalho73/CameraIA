@@ -38,6 +38,10 @@ latest_frames = {}
 recording_states = {} # cam_id: VideoWriter or None
 lock = threading.Lock()
 
+# Test Video State
+test_video_active = False
+test_video_rule = None
+
 def load_existing_alerts():
     global alert_history
     if not os.path.exists("alerts"):
@@ -145,9 +149,57 @@ def video_stream_thread(cam_id):
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
 
         with lock:
-            latest_frames[cam_id] = frame.copy()
+            latest_frames[cam_id] = frame
             
-        time.sleep(0.03)
+        time.sleep(0.05)
+
+def test_video_thread(filepath, cam_id_rule):
+    global test_video_active
+    cap = cv2.VideoCapture(filepath)
+    cam_cfg = CAMERAS.get(cam_id_rule, CAMERAS["camera_01"])
+    
+    while test_video_active and cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Obter ROI da regra escolhida
+        roi_points = np.array(cam_cfg["roi"], np.int32)
+        
+        # Lógica de processamento igual à stream ao vivo
+        if cam_cfg["type"] == "color_detection":
+            detections, mask = detect_green_stain(frame, roi_points)
+            for det in detections:
+                x, y, w, h = det['rect']
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+            if detections:
+                cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
+        
+        elif cam_cfg["type"] == "behavior_detection":
+            dynamic_roi = find_cofre(frame)
+            if dynamic_roi is not None:
+                cam_cfg["roi"] = dynamic_roi.tolist()
+                roi_points = dynamic_roi
+                cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
+                cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                detections, _ = detect_green_stain(frame, roi_points)
+                if detections:
+                    cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            else:
+                cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
+                cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+        cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
+        cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
+
+        with lock:
+            latest_frames["test_feed"] = frame
+            
+        time.sleep(0.04) # Simula ~25fps
+        
+    cap.release()
+    test_video_active = False
 
 def trigger_alert(message, frame, cam_id):
     current_time = time.time()
@@ -241,6 +293,35 @@ def stop_record(cam_id):
             recording_states[cam_id] = None
             return jsonify({"status": "success"})
     return jsonify({"status": "error", "message": "Not recording"})
+
+@app.route('/upload_video', methods=['POST'])
+def upload_video():
+    global test_video_active
+    if 'video' not in request.files:
+        return jsonify({"status": "error", "message": "No video file part"})
+    
+    file = request.files['video']
+    rule = request.form.get('rule', 'camera_01')
+    
+    if file.filename == '':
+        return jsonify({"status": "error", "message": "No selected file"})
+        
+    if file:
+        if not os.path.exists('uploads'):
+            os.makedirs('uploads')
+            
+        filepath = os.path.join('uploads', "test_video.mp4")
+        file.save(filepath)
+        
+        # Parar teste anterior se houver
+        test_video_active = False
+        time.sleep(0.1)
+        
+        # Iniciar novo teste
+        test_video_active = True
+        threading.Thread(target=test_video_thread, args=(filepath, rule), daemon=True).start()
+        
+        return jsonify({"status": "success"})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():

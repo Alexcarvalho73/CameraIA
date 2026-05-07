@@ -310,12 +310,18 @@
                 Visão IA
             </div>
             
-            <nav>
-                <div class="menu-item active">Dashboard</div>
-                <div class="menu-item">Relatórios</div>
-                <div class="menu-item">Configurações</div>
-                <div class="menu-item">Usuários</div>
+            <nav class="sidebar-menu">
+                <a href="#" class="menu-item active">Dashboard</a>
+                <a href="#" class="menu-item">Relatórios</a>
+                <a href="#" class="menu-item">Configurações</a>
+                <a href="#" class="menu-item">Usuários</a>
             </nav>
+
+            <div style="margin-top: 20px;">
+                <button onclick="document.getElementById('upload-modal').style.display='flex'" style="width: 100%; padding: 12px; background: rgba(79, 172, 254, 0.2); color: #4facfe; border: 1px solid #4facfe; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.3s;">
+                    <i class="fas fa-upload"></i> Testar Vídeo Local
+                </button>
+            </div>
 
             <div style="margin-top: auto; padding: 20px; background: rgba(255,255,255,0.05); border-radius: 15px;">
                 <p style="font-size: 12px; opacity: 0.5;">Câmera Ativa</p>
@@ -323,6 +329,7 @@
                     <option value="all">Visão Geral (Grade)</option>
                     <option value="camera_01">Câmera 01 - Ruptura</option>
                     <option value="camera_02">Câmera 02 - Comportamento</option>
+                    <option value="test_feed">Modo de Teste (Upload)</option>
                 </select>
             </div>
         </aside>
@@ -401,6 +408,36 @@
         </div>
     </div>
 
+    <!-- Upload Modal -->
+    <div id="upload-modal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <span class="close-btn" onclick="document.getElementById('upload-modal').style.display='none'">&times;</span>
+            <h3 style="margin-bottom: 20px;">Carregar Vídeo de Teste</h3>
+            
+            <form id="upload-form" onsubmit="handleUpload(event)">
+                <div style="margin-bottom: 15px;">
+                    <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Arquivo de Vídeo (.avi, .mp4)</label>
+                    <input type="file" id="video-file" accept="video/*" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white;">
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Regra a ser testada</label>
+                    <select id="video-rule" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white; cursor: pointer;">
+                        <option value="camera_01">Câmera 01 (Cor / Ruptura)</option>
+                        <option value="camera_02">Câmera 02 (Comportamento / Cofre)</option>
+                    </select>
+                </div>
+                
+                <button type="submit" id="btn-upload" style="width: 100%; padding: 12px; background: var(--success); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s;">
+                    Iniciar Teste
+                </button>
+                <div id="upload-status" style="margin-top: 10px; font-size: 12px; text-align: center; color: var(--success); display: none;">
+                    Enviando vídeo e iniciando teste...
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
         let lastAlertCount = -1;
 
@@ -418,7 +455,54 @@
                 grid.style.display = 'none';
                 main.style.display = 'block';
                 mainFeed.src = `/video_feed/${camId}`;
-                mainTitle.innerText = camId === 'camera_01' ? 'CAM 01 - RUPTURA' : 'CAM 02 - COMPORTAMENTO';
+                
+                if (camId === 'camera_01') mainTitle.innerText = 'CAM 01 - RUPTURA';
+                else if (camId === 'camera_02') mainTitle.innerText = 'CAM 02 - COMPORTAMENTO';
+                else if (camId === 'test_feed') mainTitle.innerText = 'MODO DE TESTE (VÍDEO LOCAL)';
+            }
+        }
+
+        async function handleUpload(e) {
+            e.preventDefault();
+            const fileInput = document.getElementById('video-file');
+            const ruleSelect = document.getElementById('video-rule');
+            const btn = document.getElementById('btn-upload');
+            const status = document.getElementById('upload-status');
+            
+            if (fileInput.files.length === 0) return;
+            
+            btn.disabled = true;
+            btn.style.opacity = '0.5';
+            status.style.display = 'block';
+            status.innerText = 'Enviando vídeo... Aguarde.';
+            
+            const formData = new FormData();
+            formData.append('video', fileInput.files[0]);
+            formData.append('rule', ruleSelect.value);
+            
+            try {
+                const res = await fetch('/upload_video', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                
+                if (data.status === 'success') {
+                    document.getElementById('upload-modal').style.display = 'none';
+                    // Muda para a visualização de teste automaticamente
+                    document.getElementById('camera-selector').value = 'test_feed';
+                    switchCamera('test_feed');
+                    alert('Teste iniciado com sucesso! Assista no painel central.');
+                } else {
+                    alert('Erro ao iniciar teste: ' + data.message);
+                }
+            } catch (error) {
+                alert('Erro na conexão com o servidor.');
+            } finally {
+                btn.disabled = false;
+                btn.style.opacity = '1';
+                status.style.display = 'none';
+                fileInput.value = ''; // limpa o form
             }
         }
 
