@@ -391,10 +391,15 @@
                         CAM 01 - RUPTURA
                     </div>
                     <img src="/video_feed/camera_01" class="camera-feed" alt="Video Feed 1">
-                    <button id="btn-record-camera_01" class="record-btn" onclick="toggleRecord('camera_01')">
-                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
-                        Gravar
-                    </button>
+                    <div style="display: flex; gap: 6px; position: absolute; bottom: 10px; left: 10px; right: 10px;">
+                        <button id="btn-record-camera_01" class="record-btn" onclick="toggleRecord('camera_01')" style="flex:1;">
+                            <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
+                            Gravar
+                        </button>
+                        <button id="btn-alert-camera_01" onclick="toggleAlerts('camera_01')" style="flex:1; padding: 8px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-weight: bold; background: #22c55e; color: black;">
+                            🔔 ALERTAS ON
+                        </button>
+                    </div>
                 </div>
                 <div class="camera-container">
                     <div class="status-badge">
@@ -402,10 +407,15 @@
                         CAM 02 - COMPORTAMENTO
                     </div>
                     <img src="/video_feed/camera_02" class="camera-feed" alt="Video Feed 2">
-                    <button id="btn-record-camera_02" class="record-btn" onclick="toggleRecord('camera_02')">
-                        <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
-                        Gravar
-                    </button>
+                    <div style="display: flex; gap: 6px; position: absolute; bottom: 10px; left: 10px; right: 10px;">
+                        <button id="btn-record-camera_02" class="record-btn" onclick="toggleRecord('camera_02')" style="flex:1;">
+                            <div style="width: 8px; height: 8px; background: white; border-radius: 50%;"></div>
+                            Gravar
+                        </button>
+                        <button id="btn-alert-camera_02" onclick="toggleAlerts('camera_02')" style="flex:1; padding: 8px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-weight: bold; background: #ef4444; color: white;">
+                            🔕 ALERTAS OFF
+                        </button>
+                    </div>
                 </div>
             </div>
         </main>
@@ -552,6 +562,38 @@
 
         let isRecording = { "camera_01": false, "camera_02": false };
 
+        async function toggleAlerts(camId) {
+            try {
+                const res = await fetch(`/toggle_alerts/${camId}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    updateAlertBtn(camId, data.alerts_enabled);
+                }
+            } catch(e) { console.error(e); }
+        }
+
+        function updateAlertBtn(camId, enabled) {
+            const btn = document.getElementById(`btn-alert-${camId}`);
+            if (!btn) return;
+            if (enabled) {
+                btn.style.background = '#22c55e';
+                btn.style.color = 'black';
+                btn.innerHTML = '🔔 ALERTAS ON';
+            } else {
+                btn.style.background = '#ef4444';
+                btn.style.color = 'white';
+                btn.innerHTML = '🔕 ALERTAS OFF';
+            }
+        }
+
+        async function syncAlertStatus() {
+            try {
+                const res = await fetch('/camera_status');
+                const data = await res.json();
+                Object.entries(data).forEach(([camId, enabled]) => updateAlertBtn(camId, enabled));
+            } catch(e) {}
+        }
+
         async function fetchAuditLogs() {
             try {
                 const response = await fetch('/audit_logs');
@@ -635,8 +677,10 @@
         // Fetch alerts every 2 seconds
         setInterval(fetchAlerts, 2000);
         setInterval(fetchAuditLogs, 1000);
+        setInterval(syncAlertStatus, 5000);
         fetchAlerts();
         fetchAuditLogs();
+        syncAlertStatus(); // Sincroniza estado dos botões ao carregar
 
         console.log("Dashboard IA carregado com monitoramento de alertas.");
     </script>

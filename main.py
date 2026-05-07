@@ -18,7 +18,8 @@ CAMERAS = {
         "name": "Esteira Principal - Ruptura",
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[480, 380], [1240, 345], [1250, 740], [350, 770]],
-        "type": "color_detection"
+        "type": "color_detection",
+        "alerts_enabled": True     # Câmera 01 com alertas ATIVOS
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
@@ -30,7 +31,8 @@ CAMERAS = {
             "pockets":   [[850, 650], [1150, 650], [1150, 900], [850, 900]],
             "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]]
         },
-        "type": "behavior_detection"
+        "type": "behavior_detection",
+        "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
     }
 }
 
@@ -139,6 +141,12 @@ load_existing_alerts()
 # DISPARO DE ALERTA
 # ─────────────────────────────────────────────────────────────────────────────
 def trigger_alert(message, frame, cam_id):
+    # Verifica se os alertas estão habilitados para essa câmera
+    cam_cfg = CAMERAS.get(cam_id, {})
+    if not cam_cfg.get("alerts_enabled", True):
+        print(f"[{cam_id}] Alerta IGNORADO (câmera pausada): {message}")
+        return
+
     current_time = time.time()
     last_time    = CONFIG["last_alert_time"].get(cam_id, 0)
 
@@ -345,6 +353,21 @@ def get_alerts():
 @app.route('/audit_logs')
 def get_audit_logs():
     return jsonify(audit_logs)
+
+@app.route('/toggle_alerts/<cam_id>', methods=['POST'])
+def toggle_alerts(cam_id):
+    if cam_id not in CAMERAS:
+        return jsonify({"status": "error", "message": "Câmera não encontrada"})
+    current = CAMERAS[cam_id].get("alerts_enabled", True)
+    CAMERAS[cam_id]["alerts_enabled"] = not current
+    state = "ATIVO" if CAMERAS[cam_id]["alerts_enabled"] else "PAUSADO"
+    print(f"[{cam_id}] Alertas: {state}")
+    return jsonify({"status": "success", "cam_id": cam_id, "alerts_enabled": CAMERAS[cam_id]["alerts_enabled"]})
+
+@app.route('/camera_status')
+def camera_status():
+    """Retorna o estado de alerts_enabled de todas as câmeras"""
+    return jsonify({cam_id: cfg.get("alerts_enabled", True) for cam_id, cfg in CAMERAS.items()})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
