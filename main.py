@@ -6,7 +6,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 import threading
 import numpy as np
-from detector import detect_green_stain, find_cofre
+from detector import detect_green_stain
 
 app = Flask(__name__)
 CORS(app)
