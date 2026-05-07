@@ -24,7 +24,7 @@ CAMERAS = {
         "rtsp_url": "rtsp://admin:013579ab@10.200.96.81:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[700, 20], [1900, 20], [1900, 1000], [700, 1000]],
         "zones": {
-            "pickup": [[1400, 400], [1850, 400], [1850, 800], [1400, 800]],
+            "pickup": [[1480, 330], [1920, 330], [1920, 1080], [1480, 1080]],
             "cofre": [[800, 20], [1150, 20], [1150, 300], [800, 300]],
             "descarte": [[850, 320], [1150, 320], [1150, 600], [850, 600]]
         },
@@ -40,6 +40,15 @@ audit_state = {
         "history": []
     }
 }
+
+# Histórico de logs de auditoria para o painel
+audit_logs = []
+
+def add_audit_log(message):
+    global audit_logs
+    timestamp = time.strftime("%H:%M:%S")
+    audit_logs.insert(0, f"[{timestamp}] {message}")
+    if len(audit_logs) > 20: audit_logs.pop()
 
 CONFIG = {
     "alert_cooldown": 20,
@@ -157,27 +166,35 @@ def video_stream_thread(cam_id):
                 if state_data["state"] == "IDLE":
                     if cv2.pointPolygonTest(np.array(zones["pickup"]), (float(hx), float(hy)), False) >= 0:
                         state_data["state"] = "PICKED"
-                        print(f"[{cam_id}] Auditoria: Vesícula coletada. Aguardando processamento...")
+                        add_audit_log("Mão na Esteira: Coletando vesícula...")
 
                 # 2. Detecção de Posicionamento no Cofre
                 elif state_data["state"] == "PICKED":
                     if cv2.pointPolygonTest(np.array(zones["cofre"]), (float(hx), float(hy)), False) >= 0:
                         state_data["state"] = "COFRE"
-                        print(f"[{cam_id}] Auditoria: Peça no cofre. Buscando líquido...")
+                        add_audit_log("Peça no Cofre: Aguardando furo...")
 
                 # 3. Detecção de Descarte (Finalização)
                 elif state_data["state"] in ["PICKED", "COFRE"]:
                     if cv2.pointPolygonTest(np.array(zones["descarte"]), (float(hx), float(hy)), False) >= 0:
                         # Se foi para o descarte sem passar pelo cofre -> Alerta!
                         if state_data["state"] == "PICKED":
-                            trigger_alert("AUDITORIA: Vesícula descartada SEM FURO!", frame, cam_id)
+                            msg = "ALERTA: Descartado SEM passar pelo cofre!"
+                            trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                            add_audit_log(msg)
                             state_data["state"] = "IDLE"
                         else:
                             # Passou pelo cofre, agora vamos ver se furou
-                            if time.time() - state_data.get("last_green_time", 0) > 5:
-                                trigger_alert("AUDITORIA: Vesícula no cofre MAS NÃO FUROU!", frame, cam_id)
+                            if time.time() - state_data.get("last_green_time", 0) > 6:
+                                msg = "ALERTA: Passou pelo cofre mas NÃO FUROU!"
+                                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                                add_audit_log(msg)
+                            else:
+                                add_audit_log("Ciclo Concluído: Furo e Descarte OK.")
                             state_data["state"] = "IDLE"
-                            print(f"[{cam_id}] Auditoria: Ciclo finalizado.")
+
+            # Desenha o Estado Atual na Tela
+            cv2.putText(frame, f"STATUS: {state_data['state']}", (750, 1000), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
             # Monitoramento constante de verde no cofre (independente da mão)
             green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
@@ -458,6 +475,10 @@ def handle_config():
         CONFIG.update(new_config)
         return jsonify({"status": "success", "config": CONFIG})
     return jsonify(CONFIG)
+
+@app.route('/audit_logs')
+def get_audit_logs():
+    return jsonify(audit_logs)
 
 if __name__ == '__main__':
     # Ensure alerts folder exists
