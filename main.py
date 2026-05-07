@@ -28,7 +28,7 @@ CAMERAS = {
 }
 
 CONFIG = {
-    "alert_cooldown": 10,
+    "alert_cooldown": 15,
     "last_alert_time": {} # Store per camera
 }
 
@@ -181,9 +181,9 @@ def trigger_alert(message, frame, cam_id):
         
         print(f"ALERT SAVED [{cam_id}]: {message} -> {filepath}")
         
-        # Iniciar gravação automática de 10 segundos
+        # Iniciar gravação automática de 15 segundos
         def auto_stop_recording(cid, vid_name):
-            time.sleep(10)
+            time.sleep(15)
             with lock:
                 if cid in recording_states and recording_states[cid]:
                     recording_states[cid].release()
