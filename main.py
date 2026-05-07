@@ -153,63 +153,7 @@ def video_stream_thread(cam_id):
             
         time.sleep(0.05)
 
-def test_video_thread(filepath, cam_id_rule):
-    global test_video_active
-    cap = cv2.VideoCapture(filepath)
-    cam_cfg = CAMERAS.get(cam_id_rule, CAMERAS["camera_01"])
-    
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps <= 0: fps = 25.0
-    frame_delay = 1.0 / fps
-    
-    while test_video_active and cap.isOpened():
-        start_time = time.time()
-        
-        ret, frame = cap.read()
-        if not ret:
-            break
-            
-        # Obter ROI da regra escolhida
-        roi_points = np.array(cam_cfg["roi"], np.int32)
-        
-        # Lógica de processamento igual à stream ao vivo
-        if cam_cfg["type"] == "color_detection":
-            detections, mask = detect_green_stain(frame, roi_points)
-            for det in detections:
-                x, y, w, h = det['rect']
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-            if detections:
-                cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
-        
-        elif cam_cfg["type"] == "behavior_detection":
-            dynamic_roi = find_cofre(frame)
-            if dynamic_roi is not None:
-                cam_cfg["roi"] = dynamic_roi.tolist()
-                roi_points = dynamic_roi
-                cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
-                cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-                detections, _ = detect_green_stain(frame, roi_points)
-                if detections:
-                    cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            else:
-                cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
-                cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-
-        cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
-        cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
-
-        with lock:
-            latest_frames["test_feed"] = frame
-            
-        # Sincronizar velocidade de reprodução com o FPS original
-        elapsed = time.time() - start_time
-        sleep_time = frame_delay - elapsed
-        if sleep_time > 0:
-            time.sleep(sleep_time)
-        
-    cap.release()
-    test_video_active = False
+# A lógica de teste agora será executada no generator do Flask para sincronia perfeita
 
 def trigger_alert(message, frame, cam_id):
     current_time = time.time()
@@ -228,7 +172,7 @@ def trigger_alert(message, frame, cam_id):
             "id": len(alert_history) + 1,
             "time": time.strftime("%H:%M:%S"),
             "date": time.strftime("%d/%m/%Y"),
-            "camera": CAMERAS[cam_id]["name"],
+            "camera": CAMERAS.get(cam_id, {"name": "Simulador de Teste"})["name"],
             "message": message,
             "image_url": f"/alerts_files/{filename}"
         }
@@ -257,7 +201,7 @@ def index():
 
 @app.route('/video_feed/<cam_id>')
 def video_feed(cam_id):
-    def generate():
+    def generate_live():
         while True:
             with lock:
                 if cam_id not in latest_frames:
@@ -270,7 +214,68 @@ def video_feed(cam_id):
                    frame_bytes + b'\r\n\r\n')
             time.sleep(0.04)
 
-    return Response(generate(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    def generate_test():
+        filepath = os.path.join('uploads', "test_video.mp4")
+        if not os.path.exists(filepath):
+            return
+            
+        cap = cv2.VideoCapture(filepath)
+        cam_cfg = CAMERAS.get(test_video_rule, CAMERAS["camera_01"])
+        
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0: fps = 25.0
+        frame_delay = 1.0 / fps
+        
+        while cap.isOpened():
+            start_time = time.time()
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop do video
+                continue
+                
+            roi_points = np.array(cam_cfg["roi"], np.int32)
+            
+            if cam_cfg["type"] == "color_detection":
+                detections, mask = detect_green_stain(frame, roi_points)
+                for det in detections:
+                    x, y, w, h = det['rect']
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                if detections:
+                    cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                    trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
+            
+            elif cam_cfg["type"] == "behavior_detection":
+                dynamic_roi = find_cofre(frame)
+                if dynamic_roi is not None:
+                    cam_cfg["roi"] = dynamic_roi.tolist()
+                    roi_points = dynamic_roi
+                    cv2.polylines(frame, [roi_points], True, (255, 255, 0), 3)
+                    cv2.putText(frame, "COFRE LOCALIZADO", (roi_points[0][0], roi_points[0][1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                    detections, _ = detect_green_stain(frame, roi_points)
+                    if detections:
+                        cv2.putText(frame, "VERDE NO COFRE OK", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                else:
+                    cv2.polylines(frame, [roi_points], True, (0, 0, 255), 1)
+                    cv2.putText(frame, "BUSCANDO COFRE...", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+
+            cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
+            cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
+
+            (flag, encodedImage) = cv2.imencode(".jpg", frame)
+            if flag:
+                yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + encodedImage.tobytes() + b'\r\n\r\n')
+                
+            elapsed = time.time() - start_time
+            sleep_time = frame_delay - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        cap.release()
+
+    if cam_id == "test_feed":
+        return Response(generate_test(), mimetype='multipart/x-mixed-replace; boundary=frame')
+    else:
+        return Response(generate_live(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/start_record/<cam_id>')
 def start_record(cam_id):
@@ -306,7 +311,7 @@ def stop_record(cam_id):
 
 @app.route('/upload_video', methods=['POST'])
 def upload_video():
-    global test_video_active
+    global test_video_rule
     if 'video' not in request.files:
         return jsonify({"status": "error", "message": "No video file part"})
     
@@ -323,13 +328,7 @@ def upload_video():
         filepath = os.path.join('uploads', "test_video.mp4")
         file.save(filepath)
         
-        # Parar teste anterior se houver
-        test_video_active = False
-        time.sleep(0.1)
-        
-        # Iniciar novo teste
-        test_video_active = True
-        threading.Thread(target=test_video_thread, args=(filepath, rule), daemon=True).start()
+        test_video_rule = rule
         
         return jsonify({"status": "success"})
 
