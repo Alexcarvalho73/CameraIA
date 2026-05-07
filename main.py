@@ -24,19 +24,22 @@ CAMERAS = {
         "rtsp_url": "rtsp://admin:013579ab@10.200.96.81:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[700, 20], [1900, 20], [1900, 1000], [700, 1000]],
         "zones": {
-            "pickup": [[1480, 330], [1920, 330], [1920, 1080], [1480, 1080]],
             "cofre": [[800, 20], [1150, 20], [1150, 300], [800, 300]],
-            "descarte": [[850, 320], [1150, 320], [1150, 600], [850, 600]]
+            "descarte": [[850, 320], [1150, 320], [1150, 600], [850, 600]],
+            "pockets": [[850, 650], [1150, 650], [1150, 900], [850, 900]],
+            "work_area": [[700, 20], [1300, 20], [1300, 1050], [700, 1050]]
         },
         "type": "behavior_detection"
     }
 }
 
-# Controle de Estados para Auditoria (Câmera 02)
+# Auditoria de Anomalias (Câmera 02)
 audit_state = {
     "camera_02": {
-        "state": "IDLE",
-        "last_green_time": 0,
+        "process_active": False,
+        "last_furo_time": 0,
+        "hand_in_cofre_since": 0,
+        "last_helmet_y": 0,
         "history": []
     }
 }
@@ -165,64 +168,62 @@ def video_stream_thread(cam_id):
                 cv2.polylines(frame, [np.array(pts)], True, color, 2)
                 cv2.putText(frame, zone_name.upper(), (pts[0][0], pts[0][1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-            # LÓGICA DE AUDITORIA POR COMPORTAMENTO (ESTADOS)
+            # LÓGICA DE AUDITORIA DE ANOMALIAS (SEGURANÇA DO PROCESSO)
             
-            # 1. Aguardando Fígado na Esteira
-            if state_data["state"] == "IDLE":
-                if detect_liver(frame, np.array(zones["pickup"])):
-                    state_data["state"] = "LIVER_READY"
-                    add_audit_log("Fígado detectado na esteira. Aguardando operador...")
-
-            # 2. Detecção de Inclinação (Debruçar)
-            elif state_data["state"] == "LIVER_READY":
-                if operator and operator['center'][0] > 1200: # Se inclinou para a direita (esteira)
-                    state_data["state"] = "LEANING"
-                    add_audit_log("Operador se inclinou para coleta (Debruçar).")
-
-            # 3. Coleta e Início do Giro
-            elif state_data["state"] == "LEANING":
-                # Verifica se a mão esteve na zona de pickup durante a inclinação
-                hand_in_pickup = any(cv2.pointPolygonTest(np.array(zones["pickup"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
-                if hand_in_pickup:
-                    state_data["state"] = "PICKED"
-                    add_audit_log("Peça coletada. Detectando movimento de giro...")
-                elif operator and operator['center'][0] < 1100: # Voltou sem pegar nada
-                    state_data["state"] = "IDLE"
-
-            # 4. Chegada ao Cofre
-            elif state_data["state"] == "PICKED":
-                if operator and operator['center'][1] < 400: # Subiu em direção ao topo (cofre)
-                    state_data["state"] = "COFRE"
-                    add_audit_log("Posicionado no cofre. Validando furo...")
-                
-                # Se for direto para o descarte sem passar pelo cofre -> Alerta
-                descarte_detected = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
-                if descarte_detected:
-                    msg = "ALERTA: Descarte direto SEM passar pelo cofre!"
-                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                    add_audit_log(msg)
-                    state_data["state"] = "IDLE"
-
-            # 5. Finalização no Descarte
-            elif state_data["state"] == "COFRE":
-                descarte_detected = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
-                if descarte_detected:
-                    if time.time() - state_data.get("last_green_time", 0) > 8:
-                        msg = "ALERTA: Passou pelo cofre mas NÃO FUROU!"
-                        trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                        add_audit_log(msg)
-                    else:
-                        add_audit_log("Ciclo de Auditoria Concluído com Sucesso.")
-                    state_data["state"] = "IDLE"
-
-            # Monitoramento constante de verde no cofre
+            # Monitoramento constante de verde no cofre (Gatilho de Processo)
             green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
             if green_detections:
-                state_data["last_green_time"] = time.time()
-                cv2.putText(frame, "FURO OK", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                if not state_data["process_active"]:
+                    state_data["process_active"] = True
+                    add_audit_log("PROCESSO INICIADO: Rompimento detectado no cofre.")
+                state_data["last_furo_time"] = time.time()
+                cv2.putText(frame, "FURO DETECTADO", (800, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+
+            # Heurística 1: Mão no Bolso / Cintura
+            hand_in_pocket = any(cv2.pointPolygonTest(np.array(zones["pockets"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+            if hand_in_pocket:
+                msg = "ANOMALIA: Mão na cintura/bolso detectada!"
+                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                add_audit_log(msg)
+
+            # Heurística 2: Manipulação Prolongada no Cofre
+            hand_in_cofre = any(cv2.pointPolygonTest(np.array(zones["cofre"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+            if hand_in_cofre:
+                if state_data["hand_in_cofre_since"] == 0:
+                    state_data["hand_in_cofre_since"] = time.time()
+                elif time.time() - state_data["hand_in_cofre_since"] > 4: # Mais de 4 segundos com a mão dentro
+                    msg = "ANOMALIA: Manipulação excessiva dentro do cofre!"
+                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                    add_audit_log(msg)
+                    state_data["hand_in_cofre_since"] = time.time() # Reset para não floodar
+            else:
+                state_data["hand_in_cofre_since"] = 0
+
+            # Heurística 3: Operador se Abaixou
+            if operator:
+                oy = operator['center'][1]
+                if oy > 950: # Capacete desceu demais (se abaixou)
+                    msg = "ANOMALIA: Operador se abaixou!"
+                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                    add_audit_log(msg)
+                state_data["last_helmet_y"] = oy
+            
+            # Heurística 4: Abandono de Posto ou Falta de Descarte
+            if state_data["process_active"]:
+                # Se passaram 10 segundos desde o furo
+                if time.time() - state_data["last_furo_time"] > 10:
+                    # Verifica se a mão passou pelo descarte
+                    hand_in_descarte = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
+                    if not hand_in_descarte and (not operator or operator['center'][0] < 750):
+                        msg = "ANOMALIA: Abandono de posto sem descarte!"
+                        trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                        add_audit_log(msg)
+                    state_data["process_active"] = False
+                    add_audit_log("Ciclo de auditoria encerrado.")
 
             # Desenha o Estado Atual na Tela
-            cv2.putText(frame, f"AUDITORIA: {state_data['state']}", (700, 1050), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            status_text = "MONITORANDO..." if not state_data["process_active"] else "PROCESSO ATIVO"
+            cv2.putText(frame, f"AUDITORIA: {status_text}", (700, 1050), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
 
             # Monitoramento constante de verde no cofre (independente da mão)
             green_detections, _ = detect_green_stain(frame, np.array(zones["cofre"]))
