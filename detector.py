@@ -41,9 +41,8 @@ def detect_green_stain(frame, roi_polygon):
         # é usar um limiar de área muito maior. Uma luva tem em média 2000 a 4000 pixels.
         # Um vazamento de fel real se espalha pela bandeja e é muito maior.
         
-        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 4500)
-        # Reduzido de 8000 para 4500 para pegar manchas cortadas pela borda da área (ROI)
-        if area < 4500:
+        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 6000)
+        if area < 6000:
             continue
             
         # Se passou do filtro de tamanho, é um vazamento grande (Fel)
