@@ -101,19 +101,17 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Voltou para a configuração de cor que o usuário preferia (mais estável)
-    # Aumentado o mínimo de Saturação (60) e Brilho (40) para evitar pegar brancos/cinzas
-    lower_full = np.array([25, 60, 40])
-    upper_full = np.array([90, 255, 255])
+    # Espectro ampliado para capturar o líquido da biles (que varia entre verde e amarelo)
+    lower_full = np.array([20, 50, 30])
+    upper_full = np.array([95, 255, 255])
     full_mask = cv2.inRange(hsv, lower_full, upper_full)
     
-    # Inibição ULTRA-ESPECÍFICA apenas do amarelo "marca-texto" das luvas
-    # Luvas são extremamente saturadas e brilhantes. O fel amarelo é mais "fosco".
-    lower_glove = np.array([25, 180, 180])
+    # Inibição de Amarelo Fluorescente (Luvas) - Mantida bem restrita
+    lower_glove = np.array([22, 160, 160])
     upper_glove = np.array([35, 255, 255])
     glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
-    # Remove apenas o amarelo fluorescente
+    # Remove a luva mas mantém o verde/amarelo do líquido
     green_mask = cv2.subtract(full_mask, glove_mask)
     
     # Clean up the mask (remove noise)
@@ -129,9 +127,8 @@ def detect_green_stain(frame, roi_polygon):
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # 1. Ignorar sujeira pequena e movimentos de mão rápidos
-        # Voltando para um limite equilibrado que funcionava bem com as cores antigas
-        if area < 7000:
+        # Reduzido para capturar jatos pequenos e rápidos de líquido
+        if area < 800:
             continue
             
         detections.append({'rect': (x, y, w, h), 'area': area})
