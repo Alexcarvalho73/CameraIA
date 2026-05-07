@@ -468,12 +468,24 @@ def video_feed(cam_id):
 
     # ── Câmera ao Vivo ────────────────────────────────────────────────────────
     def generate_live():
+        # Frame de placeholder enviado enquanto a câmera conecta
+        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Conectando camera...", (120, 220),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (100, 100, 100), 2)
+        cv2.putText(placeholder, cam_id.replace("_", " ").upper(), (180, 270),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 60), 1)
+        _, ph_enc = cv2.imencode(".jpg", placeholder)
+        ph_bytes  = ph_enc.tobytes()
+
         while True:
             with lock:
                 frame = latest_frames.get(cam_id)
 
             if frame is None:
-                time.sleep(0.1)   # aguarda o frame ficar disponível (sem loop infinito)
+                # Envia o placeholder para o browser não girar
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
+                       + ph_bytes + b'\r\n\r\n')
+                time.sleep(0.5)
                 continue
 
             flag, enc = cv2.imencode(".jpg", frame)
