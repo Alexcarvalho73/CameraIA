@@ -158,7 +158,13 @@ def test_video_thread(filepath, cam_id_rule):
     cap = cv2.VideoCapture(filepath)
     cam_cfg = CAMERAS.get(cam_id_rule, CAMERAS["camera_01"])
     
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0: fps = 25.0
+    frame_delay = 1.0 / fps
+    
     while test_video_active and cap.isOpened():
+        start_time = time.time()
+        
         ret, frame = cap.read()
         if not ret:
             break
@@ -196,7 +202,11 @@ def test_video_thread(filepath, cam_id_rule):
         with lock:
             latest_frames["test_feed"] = frame
             
-        time.sleep(0.04) # Simula ~25fps
+        # Sincronizar velocidade de reprodução com o FPS original
+        elapsed = time.time() - start_time
+        sleep_time = frame_delay - elapsed
+        if sleep_time > 0:
+            time.sleep(sleep_time)
         
     cap.release()
     test_video_active = False
