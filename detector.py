@@ -16,7 +16,7 @@ def detect_green_stain(frame, roi_polygon):
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
     # Reverted Hue to catch yellowish bile, but increased Saturation
-    lower_green = np.array([25, 50, 20])
+    lower_green = np.array([20, 50, 20])
     upper_green = np.array([90, 255, 255])
     
     # Create a mask for green color
@@ -41,8 +41,9 @@ def detect_green_stain(frame, roi_polygon):
         # é usar um limiar de área muito maior. Uma luva tem em média 2000 a 4000 pixels.
         # Um vazamento de fel real se espalha pela bandeja e é muito maior.
         
-        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 8000)
-        if area < 8000:
+        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 4500)
+        # Reduzido de 8000 para 4500 para pegar manchas cortadas pela borda da área (ROI)
+        if area < 4500:
             continue
             
         # Se passou do filtro de tamanho, é um vazamento grande (Fel)
