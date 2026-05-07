@@ -251,6 +251,14 @@
             to { transform: translateX(0); opacity: 1; }
         }
 
+        .filter-chip {
+            padding: 4px 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.15);
+            background: transparent; color: #8b949e; font-size: 11px; font-weight: 600;
+            cursor: pointer; transition: 0.2s;
+        }
+        .filter-chip:hover { background: rgba(255,255,255,0.08); color: #e6edf3; }
+        .filter-chip.active { background: var(--primary); border-color: var(--primary); color: white; }
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -428,9 +436,27 @@
 
         <aside class="sidebar-right">
             <div class="alerts-panel">
-                <h3 style="margin-bottom: 20px;">Alertas Recentes</h3>
+                <!-- Cabeçalho com contador -->
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                    <h3 style="font-size: 15px;">Alertas Recentes</h3>
+                    <span id="total-alerts" style="background: var(--danger); color: white; font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 12px;">0</span>
+                </div>
+
+                <!-- Filtros por Câmera -->
+                <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px;">
+                    <button id="filter-all" onclick="setFilter('all')" class="filter-chip active">Todas</button>
+                    <button id="filter-camera_01" onclick="setFilter('camera_01')" class="filter-chip">CAM 01</button>
+                    <button id="filter-camera_02" onclick="setFilter('camera_02')" class="filter-chip">CAM 02</button>
+                    <button id="filter-test" onclick="setFilter('test')" class="filter-chip">Teste</button>
+                </div>
+
+                <!-- Botão Limpar -->
+                <button onclick="clearFilteredAlerts()" style="width: 100%; margin-bottom: 12px; padding: 7px; background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.4); color: #f87171; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;">
+                    🗑 Limpar alertas exibidos
+                </button>
+
                 <div id="alerts-list">
-                    <!-- Alerts will be loaded here dynamically -->
+                    <!-- Preenchido via JS -->
                 </div>
             </div>
         </aside>
@@ -477,6 +503,35 @@
 
     <script>
         let lastAlertCount = -1;
+        let allAlerts      = [];       // todos do servidor
+        let hiddenAlertIds = new Set(); // IDs removidos pelo "Limpar"
+        let activeFilter   = 'all';    // filtro ativo
+        const MAX_ALERTS   = 30;       // máximo exibido
+
+        // Chips de filtro
+        function setFilter(filter) {
+            activeFilter = filter;
+            document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+            document.getElementById(`filter-${filter}`)?.classList.add('active');
+            lastAlertCount = -1; // força redesenho
+            renderAlerts();
+        }
+
+        function filterMatches(alert) {
+            if (activeFilter === 'all')       return true;
+            if (activeFilter === 'test')      return (alert.camera || '').toLowerCase().includes('teste') || (alert.message || '').toLowerCase().includes('teste');
+            if (activeFilter === 'camera_01') return (alert.camera || '').toLowerCase().includes('esteira');
+            if (activeFilter === 'camera_02') return (alert.camera || '').toLowerCase().includes('cofre') || (alert.camera || '').toLowerCase().includes('ves');
+            return true;
+        }
+
+        function clearFilteredAlerts() {
+            // Marca os IDs visíveis como ocultos
+            const visible = allAlerts.filter(a => !hiddenAlertIds.has(a.id) && filterMatches(a)).slice(0, MAX_ALERTS);
+            visible.forEach(a => hiddenAlertIds.add(a.id));
+            lastAlertCount = -1;
+            renderAlerts();
+        }
 
         function switchCamera(camId) {
             const grid = document.getElementById('grid-view');
@@ -635,39 +690,59 @@
         async function fetchAlerts() {
             try {
                 const response = await fetch('/alerts');
-                const alerts = await response.json();
-                
-                const list = document.getElementById('alerts-list');
+                allAlerts = await response.json();
+
+                // Filtra e limita
+                const visible = allAlerts
+                    .filter(a => !hiddenAlertIds.has(a.id) && filterMatches(a))
+                    .slice(0, MAX_ALERTS);
+
                 const totalBadge = document.getElementById('total-alerts');
-                
-                totalBadge.innerText = alerts.length;
-                
-                // Only update if count changed
-                if (alerts.length !== lastAlertCount) {
-                    list.innerHTML = '';
-                    alerts.forEach(alert => {
-                        const div = document.createElement('div');
-                        div.className = 'alert-item';
-                        div.style.cursor = 'pointer';
-                        div.onclick = () => openModal(alert.image_url, `${alert.date} ${alert.time} - ${alert.message}`);
-                        div.innerHTML = `
-                            <p class="alert-time">${alert.date || 'Hoje'} ${alert.time || ''}</p>
-                            <p style="font-size: 11px; font-weight: bold; color: var(--secondary); margin-bottom: 5px;">${alert.camera || 'Câmera Desconhecida'}</p>
-                            <p>${alert.message}</p>
-                            ${alert.video_url ? `
-                                <div style="margin-top: 10px; display: flex; gap: 5px;">
-                                    <button onclick="event.stopPropagation(); openModal('${alert.image_url}', '${alert.date} ${alert.time}')" style="background: rgba(255,255,255,0.1); border: none; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer;">📷 Foto</button>
-                                    <button onclick="event.stopPropagation(); window.open('${alert.video_url}', '_blank')" style="background: var(--secondary); border: none; color: black; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; font-weight: bold;">🎥 Ver Vídeo (20s)</button>
-                                </div>
-                            ` : ''}
-                        `;
-                        list.appendChild(div);
-                    });
-                    lastAlertCount = alerts.length;
-                }
+                totalBadge.innerText = visible.length;
+
+                const sig = visible.map(a => a.id).join(',');
+                if (sig === (fetchAlerts._lastSig || '')) return;
+                fetchAlerts._lastSig = sig;
+
+                renderAlerts(visible);
             } catch (e) {
                 console.error("Error fetching alerts:", e);
             }
+        }
+
+        function renderAlerts(visible) {
+            if (!visible) {
+                visible = allAlerts
+                    .filter(a => !hiddenAlertIds.has(a.id) && filterMatches(a))
+                    .slice(0, MAX_ALERTS);
+            }
+            const list = document.getElementById('alerts-list');
+            const totalBadge = document.getElementById('total-alerts');
+            totalBadge.innerText = visible.length;
+
+            list.innerHTML = '';
+            if (visible.length === 0) {
+                list.innerHTML = '<p style="font-size:12px; color:#555; text-align:center; margin-top:20px;">Nenhum alerta para exibir.</p>';
+                return;
+            }
+            visible.forEach(alert => {
+                const div = document.createElement('div');
+                div.className = 'alert-item';
+                div.style.cursor = 'pointer';
+                div.onclick = () => openModal(alert.image_url, `${alert.date} ${alert.time} - ${alert.message}`);
+                div.innerHTML = `
+                    <p class="alert-time">${alert.date || 'Hoje'} ${alert.time || ''}</p>
+                    <p style="font-size: 11px; font-weight: bold; color: var(--secondary); margin-bottom: 5px;">${alert.camera || 'Câmera'}</p>
+                    <p>${alert.message}</p>
+                    ${alert.video_url ? `
+                        <div style="margin-top: 10px; display: flex; gap: 5px;">
+                            <button onclick="event.stopPropagation(); openModal('${alert.image_url}', '${alert.date} ${alert.time}')" style="background: rgba(255,255,255,0.1); border: none; color: white; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer;">📷 Foto</button>
+                            <button onclick="event.stopPropagation(); window.open('${alert.video_url}', '_blank')" style="background: var(--secondary); border: none; color: black; padding: 4px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; font-weight: bold;">🎥 Ver Vídeo (20s)</button>
+                        </div>
+                    ` : ''}
+                `;
+                list.appendChild(div);
+            });
         }
 
         function openModal(imgUrl, info) {
