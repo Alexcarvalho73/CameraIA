@@ -15,11 +15,20 @@ def detect_green_stain(frame, roi_polygon):
     # Convert to HSV for better color segmentation
     hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
     
-    # Range amplo para pegar fel (do laranja-oliva ao verde)
-    # Baixado para 15 para pegar tons mais amarelados/alaranjados do fel
-    lower_full = np.array([15, 50, 20])
+    # Voltou para a configuração de cor que o usuário preferia (mais estável)
+    # Aumentado o mínimo de Saturação (60) e Brilho (40) para evitar pegar brancos/cinzas
+    lower_full = np.array([25, 60, 40])
     upper_full = np.array([90, 255, 255])
-    green_mask = cv2.inRange(hsv, lower_full, upper_full)
+    full_mask = cv2.inRange(hsv, lower_full, upper_full)
+    
+    # Inibição ULTRA-ESPECÍFICA apenas do amarelo "marca-texto" das luvas
+    # Luvas são extremamente saturadas e brilhantes. O fel amarelo é mais "fosco".
+    lower_glove = np.array([25, 180, 180])
+    upper_glove = np.array([35, 255, 255])
+    glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
+    
+    # Remove apenas o amarelo fluorescente
+    green_mask = cv2.subtract(full_mask, glove_mask)
     
     # Clean up the mask (remove noise)
     kernel = np.ones((7,7), np.uint8)
@@ -34,24 +43,10 @@ def detect_green_stain(frame, roi_polygon):
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # 1. Ignorar sujeira irrelevante
-        if area < 1500:
+        # 1. Ignorar sujeira pequena e movimentos de mão rápidos
+        # Voltando para um limite equilibrado que funcionava bem com as cores antigas
+        if area < 7000:
             continue
-
-        # 2. Heurística de Cor x Tamanho (Refinada)
-        mask_cnt = np.zeros(green_mask.shape, np.uint8)
-        cv2.drawContours(mask_cnt, [cnt], -1, 255, -1)
-        mean_val = cv2.mean(hsv, mask=mask_cnt)
-        mean_hue = mean_val[0]
-        
-        # Se for amarelado (tom de luva), exigimos mais área, mas não tanto quanto antes.
-        # Se for esverdeado (tom de fel puro), somos bem sensíveis.
-        if mean_hue < 32:
-            # Tons Amarelados (Pode ser luva ou fel amarelo)
-            if area < 8500: continue
-        else:
-            # Tons Esverdeados (Quase sempre fel)
-            if area < 4500: continue
             
         detections.append({'rect': (x, y, w, h), 'area': area})
             
