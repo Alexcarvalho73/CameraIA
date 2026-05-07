@@ -17,7 +17,7 @@ CAMERAS = {
     "camera_01": {
         "name": "Esteira Principal - Ruptura",
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
-        "roi": [[480, 380], [1240, 345], [1250, 740], [350, 770]],
+        "roi": [[165, 370], [740, 320], [760, 690], [150, 730]],
         "type": "color_detection",
         "alerts_enabled": True     # Câmera 01 com alertas ATIVOS
     },
