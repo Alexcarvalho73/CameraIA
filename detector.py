@@ -20,10 +20,10 @@ def detect_green_stain(frame, roi_polygon):
     upper_full = np.array([90, 255, 255])
     full_mask = cv2.inRange(hsv, lower_full, upper_full)
     
-    # Inibição específica da Luva Amarela (Amarelo vibrante/fluorescente)
-    # As luvas têm saturação e brilho (Value) muito altos comparados ao fel
-    lower_yellow_glove = np.array([22, 160, 150])
-    upper_yellow_glove = np.array([35, 255, 255])
+    # Inibição específica da Luva Amarela (Amarelo vibrante/fluorescente e suas sombras)
+    # Ampliado o range para pegar partes da luva que não são tão saturadas (sombras)
+    lower_yellow_glove = np.array([20, 100, 80])
+    upper_yellow_glove = np.array([38, 255, 255])
     glove_mask = cv2.inRange(hsv, lower_yellow_glove, upper_yellow_glove)
     
     # Remove a cor da luva da detecção principal
@@ -42,17 +42,30 @@ def detect_green_stain(frame, roi_polygon):
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
         
-        # O filtro de aspecto (compacto) não funcionou bem porque as luvas, dependendo do ângulo, 
-        # formam retângulos longos e finos.
-        # A solução mais robusta (sem usar redes neurais pesadas para detectar a pessoa)
-        # é usar um limiar de área muito maior. Uma luva tem em média 2000 a 4000 pixels.
-        # Um vazamento de fel real se espalha pela bandeja e é muito maior.
-        
-        # 1. Ignorar objetos do tamanho de luvas/mãos (Area < 7000)
-        if area < 7000:
+        # 1. Ignorar sujeira muito pequena
+        if area < 1000:
             continue
+
+        # 2. Heurística Inteligente por Cor Dominante
+        # Vamos ver a cor média do que foi detectado
+        mask_cnt = np.zeros(green_mask.shape, np.uint8)
+        cv2.drawContours(mask_cnt, [cnt], -1, 255, -1)
+        mean_val = cv2.mean(hsv, mask=mask_cnt)
+        mean_hue = mean_val[0]
+        
+        # Se a cor for predominantemente amarela (Hue < 35), é provável que seja a luva.
+        # Nesse caso, exigimos uma área GIGANTE para alarmar (evita falso positivo).
+        # Se a cor for verde/oliva (Hue >= 35), é quase certo que é FEL.
+        # Nesse caso, podemos ser muito mais sensíveis (área menor).
+        
+        if mean_hue < 35:
+            # Amarelo (Luva)
+            if area < 12000: continue
+        else:
+            # Verde (Fel)
+            if area < 4000: continue
             
-        # Se passou do filtro de tamanho, é um vazamento grande (Fel)
+        # Se passou dos filtros, é um alerta válido
         detections.append({'rect': (x, y, w, h), 'area': area})
             
     return detections, green_mask
