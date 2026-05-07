@@ -16,7 +16,7 @@ CAMERAS = {
     "camera_01": {
         "name": "Esteira - Ruptura de Fel",
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
-        "roi": [[360, 540], [640, 480], [1080, 1020], [520, 1020]],
+        "roi": [[280, 500], [720, 440], [1150, 1070], [400, 1070]],
         "type": "color_detection"
     },
     "camera_02": {
