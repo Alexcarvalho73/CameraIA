@@ -208,18 +208,22 @@ def video_stream_thread(cam_id):
                     add_audit_log(msg)
                 state_data["last_helmet_y"] = oy
             
-            # Heurística 4: Abandono de Posto ou Falta de Descarte
+            # Heurística 4: Abandono de Posto Imediato Pós-Furo
             if state_data["process_active"]:
-                # Se passaram 10 segundos desde o furo
-                if time.time() - state_data["last_furo_time"] > 10:
-                    # Verifica se a mão passou pelo descarte
-                    hand_in_descarte = any(cv2.pointPolygonTest(np.array(zones["descarte"]), (float(h['center'][0]), float(h['center'][1])), False) >= 0 for h in hands)
-                    if not hand_in_descarte and (not operator or operator['center'][0] < 750):
-                        msg = "ANOMALIA: Abandono de posto sem descarte!"
+                time_since_furo = time.time() - state_data["last_furo_time"]
+                
+                # Se o operador se afastar da work_area em menos de 3 segundos após o sinal verde
+                if time_since_furo < 3:
+                    if not operator or operator['center'][0] < 750: # Saiu da área central
+                        msg = "ANOMALIA: Abandono imediato pós-furo!"
                         trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
                         add_audit_log(msg)
+                        state_data["process_active"] = False # Cancela o ciclo por abandono
+                
+                # Finaliza o monitoramento do ciclo após 8 segundos
+                elif time_since_furo > 8:
                     state_data["process_active"] = False
-                    add_audit_log("Ciclo de auditoria encerrado.")
+                    add_audit_log("Ciclo concluído (tempo de permanência OK).")
 
             # Desenha o Estado Atual na Tela
             status_text = "MONITORANDO..." if not state_data["process_active"] else "PROCESSO ATIVO"
@@ -423,9 +427,16 @@ def video_feed(cam_id):
                     state_data["hand_in_cofre_since"] = 0
 
                 # Heurística 4: Abandono / Finalização
-                if state_data["process_active"] and time.time() - state_data["last_furo_time"] > 10:
-                    state_data["process_active"] = False
-                    add_audit_log("[TESTE] Ciclo de auditoria encerrado.")
+                if state_data["process_active"]:
+                    time_since_furo = time.time() - state_data["last_furo_time"]
+                    if time_since_furo < 3:
+                        if not operator or operator['center'][0] < 750:
+                            add_audit_log("[TESTE] ANOMALIA: Abandono imediato!")
+                            trigger_alert("[TESTE] Auditoria: Abandono!", frame, "test_feed")
+                            state_data["process_active"] = False
+                    elif time_since_furo > 8:
+                        state_data["process_active"] = False
+                        add_audit_log("[TESTE] Ciclo concluído.")
 
             cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
             cv2.putText(frame, "MODO TESTE", (50, 90), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
