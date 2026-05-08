@@ -523,12 +523,19 @@ def use_server_video():
     if not os.path.exists(src_path):
         return jsonify({"status": "error", "message": f"Arquivo não encontrado: {src_path}"})
 
-    # Copia para o slot de teste (sobrescreve) para reutilizar o generate_test()
+    # Copia para o slot de teste — mas evita copiar arquivo sobre si mesmo
     os.makedirs('uploads', exist_ok=True)
     import shutil
-    shutil.copy2(src_path, os.path.join('uploads', 'test_video.mp4'))
+    dest_path = os.path.join('uploads', 'test_video.mp4')
+    src_abs   = os.path.realpath(src_path)
+    dest_abs  = os.path.realpath(dest_path)
+    if src_abs != dest_abs:
+        shutil.copy2(src_path, dest_path)
+        print(f"[TESTE] Vídeo copiado: {src_path} → {dest_path}")
+    else:
+        print(f"[TESTE] Vídeo já no slot de teste: {src_path}")
     test_video_rule = rule
-    print(f"[TESTE] Usando vídeo do servidor: {src_path} → uploads/test_video.mp4 | Regra: {rule}")
+    print(f"[TESTE] Regra ativa: {rule}")
     return jsonify({"status": "success"})
 
 @app.route('/upload_video', methods=['POST'])
