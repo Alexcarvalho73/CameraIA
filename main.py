@@ -286,7 +286,7 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
 
     # ── REGRA 1: Início de Ciclo e Detecção de Pedra Biliar (Objeto Sólido)
     cofre_pts = np.array(zones["cofre"])
-    green_det, _ = detect_green_stain(frame, cofre_pts)
+    green_det, fel_mask = detect_green_stain(frame, cofre_pts)
     
     if green_det:
         if not state_data["process_active"]:
@@ -296,9 +296,10 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
         cv2.putText(frame, "BILE NO COFRE", (820, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
     
-    # Detecção de Pedra: busca objeto sólido se houver fundo salvo
+    # Detecção de Pedra: busca objeto sólido filtrando mãos e fel
     bg = cofre_backgrounds.get(cam_id)
-    has_stone, stone_mask = detect_stone(frame, cofre_pts, bg)
+    # Passamos hands e fel_mask para o detector ignorar esses objetos
+    has_stone, stone_mask = detect_stone(frame, cofre_pts, bg, hands=hands, fel_mask=fel_mask)
     
     if has_stone and state_data["process_active"]:
         # Só marca pedra se for logo após o furo (janela de 10s)

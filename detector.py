@@ -272,26 +272,36 @@ def detect_green_stain(frame, roi_polygon):
 # ─────────────────────────────────────────────────────────────────────────────
 # DETECÇÃO DE PEDRA (Objeto Sólido por Diferença de Fundo)
 # ─────────────────────────────────────────────────────────────────────────────
-def detect_stone(frame, roi_points, bg_gray):
+def detect_stone(frame, roi_points, bg_gray, hands=[], fel_mask=None):
     """
-    Detecta objetos sólidos no cofre comparando com um fundo limpo.
-    Retorna True se houver um objeto estranho significativo.
+    Detecta objetos sólidos no cofre filtrando mãos e bile líquida.
     """
     if bg_gray is None: return False, None
     
-    # Mascara a ROI
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [roi_points], 255)
     
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    gray = cv2.GaussianBlur(gray, (15, 15), 0)
     
-    # Diferença absoluta entre fundo e frame atual
+    # Diferença de fundo
     diff = cv2.absdiff(bg_gray, gray)
-    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
     thresh = cv2.bitwise_and(thresh, mask)
-    
-    # Limpeza
+
+    # EXCLUSÃO 1: Remover as mãos (amarelo) da análise de pedra
+    for h in hands:
+        x, y, w, h_rect = h['rect']
+        cv2.rectangle(thresh, (x-15, y-15), (x+w+15, y+h_rect+15), 0, -1)
+
+    # EXCLUSÃO 2: Remover o fel líquido (verde)
+    if fel_mask is not None:
+        # Garante que a máscara de fel esteja no tamanho correto
+        if fel_mask.shape[:2] != thresh.shape[:2]:
+            fel_mask = cv2.resize(fel_mask, (thresh.shape[1], thresh.shape[0]))
+        thresh = cv2.subtract(thresh, fel_mask)
+
+    # Limpeza morfológica
     kernel = np.ones((5,5), np.uint8)
     thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     
@@ -299,7 +309,8 @@ def detect_stone(frame, roi_points, bg_gray):
     
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1200: # Tamanho mínimo de uma pedra biliar
+        # Pedra biliar: entre 800 e 8000 pixels
+        if 800 < area < 8000:
             return True, thresh
             
     return False, thresh
