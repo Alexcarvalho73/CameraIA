@@ -7,6 +7,19 @@ import numpy as np
 try:
     import oracledb
     ORACLE_AVAILABLE = True
+    # Ativa o modo Thick para suportar Auto-login Wallet (cwallet.sso) sem senha PEM
+    try:
+        # Tenta inicializar com o caminho do Instant Client instalado na VM
+        instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
+        if os.path.exists(instant_client_path):
+            oracledb.init_oracle_client(lib_dir=instant_client_path)
+            print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
+        else:
+            # Caso local ou caminho diferente, tenta sem lib_dir (presume que está no PATH)
+            oracledb.init_oracle_client()
+            print("[DB] Oracle Thick Mode ativado.")
+    except Exception as e:
+        print(f"[DB] Erro ao ativar modo Thick: {e}")
 except ImportError:
     ORACLE_AVAILABLE = False
     print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
