@@ -1,0 +1,13 @@
+imaculado_high = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+
+imaculado_medium = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_medium.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+
+imaculado_low = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_low.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+
+imaculado_tp = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_tp.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+
+imaculado_tpurgent = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_tpurgent.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+
+
+imaculado = (description= (retry_count=20)(retry_delay=3)(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))
+

@@ -296,10 +296,18 @@ def detect_stone(frame, roi_points, bg_gray, hands=[], fel_mask=None):
 
     # EXCLUSÃO 2: Remover o fel líquido (verde)
     if fel_mask is not None:
-        # Garante que a máscara de fel esteja no tamanho correto
         if fel_mask.shape[:2] != thresh.shape[:2]:
             fel_mask = cv2.resize(fel_mask, (thresh.shape[1], thresh.shape[0]))
         thresh = cv2.subtract(thresh, fel_mask)
+
+    # EXCLUSÃO 3: Remover o branco intenso (provável avental/braço do operador)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_white = np.array([0, 0, 200]) # Branco brilhante
+    upper_white = np.array([180, 50, 255])
+    white_mask = cv2.inRange(hsv, lower_white, upper_white)
+    kernel = np.ones((7, 7), np.uint8)
+    white_mask = cv2.dilate(white_mask, kernel, iterations=1)
+    thresh = cv2.subtract(thresh, white_mask)
 
     # Limpeza morfológica
     kernel = np.ones((5,5), np.uint8)
@@ -310,8 +318,8 @@ def detect_stone(frame, roi_points, bg_gray, hands=[], fel_mask=None):
     stone_detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        # Pedra biliar: entre 800 e 8000 pixels
-        if 800 < area < 8000:
+        # Pedra biliar: Ajustado mínimo para 1200 para evitar ruídos/sombras
+        if 1200 < area < 8000:
             x, y, w, h = cv2.boundingRect(cnt)
             stone_detections.append({'rect': (x, y, w, h), 'area': area})
             

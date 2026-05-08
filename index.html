@@ -319,9 +319,9 @@
             </div>
             
             <nav class="sidebar-menu">
-                <a href="#" class="menu-item active">Dashboard</a>
-                <a href="#" class="menu-item">Relatórios</a>
-                <a href="#" class="menu-item">Configurações</a>
+                <a href="#" class="menu-item active" onclick="switchView('dashboard')">Dashboard</a>
+                <a href="#" class="menu-item" onclick="alert('Módulo de Relatórios em breve...')">Relatórios</a>
+                <a href="#" class="menu-item" onclick="openSettingsModal()">Configurações</a>
                 <a href="#" class="menu-item">Usuários</a>
             </nav>
 
@@ -530,6 +530,26 @@
         </div>
     </div>
 
+    <!-- Modal de Configurações das Câmeras -->
+    <div id="settings-modal" class="modal">
+        <div class="modal-content" style="max-width: 500px; background: #1e293b; border-radius: 20px; padding: 30px; border: 1px solid rgba(255,255,255,0.1);">
+            <span class="close-btn" onclick="closeSettingsModal()" style="position:absolute;top:-35px;right:0;color:white;font-size:28px;cursor:pointer;">&times;</span>
+            <h3 style="margin-bottom: 25px; font-size: 18px; color: var(--primary); display: flex; align-items: center; gap: 10px;">
+                ⚙️ Configurações das Câmeras
+            </h3>
+            
+            <div id="camera-settings-list" style="display: flex; flex-direction: column; gap: 20px;">
+                <!-- Preenchido via JS -->
+            </div>
+
+            <div style="margin-top: 30px; display: flex; justify-content: flex-end;">
+                <button onclick="closeSettingsModal()" style="padding: 10px 25px; background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; cursor: pointer; font-weight: 600;">
+                    Fechar
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script>
         let lastAlertCount = -1;
         let allAlerts      = [];       // todos do servidor
@@ -560,6 +580,81 @@
             visible.forEach(a => hiddenAlertIds.add(a.id));
             lastAlertCount = -1;
             renderAlerts();
+        }
+
+        function switchView(view) {
+            // No futuro pode gerenciar diferentes telas
+            console.log("Switching to", view);
+        }
+
+        async function openSettingsModal() {
+            document.getElementById('settings-modal').style.display = 'flex';
+            await loadCameraSettings();
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settings-modal').style.display = 'none';
+        }
+
+        async function loadCameraSettings() {
+            const listEl = document.getElementById('camera-settings-list');
+            listEl.innerHTML = '<p style="text-align:center; opacity:0.5;">Carregando...</p>';
+            
+            try {
+                const res = await fetch('/camera_status');
+                const data = await res.json();
+                
+                listEl.innerHTML = '';
+                Object.entries(data).forEach(([camId, cfg]) => {
+                    const section = document.createElement('div');
+                    section.style.cssText = 'background: rgba(255,255,255,0.03); padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05);';
+                    section.innerHTML = `
+                        <p style="font-size: 12px; font-weight: 700; color: var(--secondary); margin-bottom: 12px;">${cfg.name || camId}</p>
+                        <div style="display: flex; flex-direction: column; gap: 8px;">
+                            <label style="font-size: 11px; opacity: 0.6;">Número de Celular (Notificações)</label>
+                            <div style="display: flex; gap: 10px;">
+                                <input type="text" id="phone-${camId}" value="${cfg.phone_number || ''}" placeholder="Ex: 5511999999999" 
+                                    style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 8px; color: white; font-size: 13px;">
+                                <button onclick="saveCameraPhone('${camId}')" 
+                                    style="background: var(--primary); color: #0f172a; border: none; padding: 0 15px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer;">
+                                    Salvar
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    listEl.appendChild(section);
+                });
+            } catch (e) {
+                listEl.innerHTML = '<p style="color:var(--danger); text-align:center;">Erro ao carregar configurações.</p>';
+            }
+        }
+
+        async function saveCameraPhone(camId) {
+            const phone = document.getElementById(`phone-${camId}`).value;
+            const btn = event.target;
+            btn.innerText = '...';
+            btn.disabled = true;
+            
+            try {
+                const res = await fetch(`/update_camera_settings/${camId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ phone_number: phone })
+                });
+                if (res.ok) {
+                    btn.innerText = 'OK!';
+                    btn.style.background = 'var(--success)';
+                    setTimeout(() => {
+                        btn.innerText = 'Salvar';
+                        btn.style.background = 'var(--primary)';
+                        btn.disabled = false;
+                    }, 2000);
+                }
+            } catch (e) {
+                alert('Erro ao salvar.');
+                btn.innerText = 'Salvar';
+                btn.disabled = false;
+            }
         }
 
         function switchCamera(camId) {

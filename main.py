@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import numpy as np
+import oracledb
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker, detect_stone
@@ -20,7 +21,8 @@ CAMERAS = {
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[280, 375], [790, 320], [810, 710], [195, 750]],
         "type": "color_detection",
-        "alerts_enabled": True     # Câmera 01 com alertas ATIVOS
+        "alerts_enabled": True,
+        "phone_number": ""         # Número para notificações
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
@@ -31,7 +33,8 @@ CAMERAS = {
             "descarte":  [[850, 320], [1150, 320], [1150, 600], [850, 600]],
         },
         "type": "behavior_detection",
-        "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
+        "alerts_enabled": False,
+        "phone_number": ""         # Número para notificações
     }
 }
 
@@ -52,6 +55,8 @@ def load_roi_config():
                 continue
             if 'roi' in cfg:
                 CAMERAS[cam_id]['roi'] = cfg['roi']
+            if 'phone_number' in cfg:
+                CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
                 for zone_name, pts in cfg['zones'].items():
                     CAMERAS[cam_id]['zones'][zone_name] = pts
@@ -67,6 +72,8 @@ def persist_roi_config():
             data[cam_id] = {}
             if 'roi' in cfg:
                 data[cam_id]['roi'] = cfg['roi']
+            if 'phone_number' in cfg:
+                data[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg:
                 data[cam_id]['zones'] = cfg['zones']
         with open(ROI_CONFIG_FILE, 'w') as f:
@@ -121,6 +128,45 @@ CONFIG = {
     "alert_cooldown": 20,      # segundos entre alertas da mesma câmera
     "last_alert_time": {}
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONEXÃO ORACLE
+# ─────────────────────────────────────────────────────────────────────────────
+ORACLE_WALLET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DriveOracle')
+
+def insert_alert_to_db(phone, message, frame):
+    """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
+    if not phone or frame is None:
+        return
+    
+    # Redimensiona para economia de espaço no banco (640x360)
+    resized = cv2.resize(frame, (640, 360))
+    _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 80])
+    img_bytes = buffer.tobytes()
+    
+    def run_insert():
+        conn = None
+        try:
+            conn = oracledb.connect(
+                user="mensagem",
+                password="crbsAcs@2026",
+                dsn="imaculado_low",
+                config_dir=ORACLE_WALLET_PATH,
+                wallet_location=ORACLE_WALLET_PATH
+            )
+            cursor = conn.cursor()
+            sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
+            cursor.execute(sql, [str(phone), str(message), 0, 'G', img_bytes])
+            conn.commit()
+            cursor.close()
+            print(f"[DB] Alerta e imagem gravados para {phone}")
+        except Exception as e:
+            print(f"[DB] Erro Oracle: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    threading.Thread(target=run_insert, daemon=True).start()
 
 alert_history    = []
 latest_frames    = {}
@@ -242,6 +288,11 @@ def trigger_alert(message, frame, cam_id, record_video=True):
         alert_history.pop()
 
     print(f"ALERTA [{cam_id}]: {message}")
+
+    # Gravação no Banco de Dados Oracle
+    phone = cam_cfg.get("phone_number")
+    if phone:
+        insert_alert_to_db(phone, message, frame)
 
     if record_video:
         # Gravação automática de 15 s
@@ -530,8 +581,24 @@ def toggle_alerts(cam_id):
 
 @app.route('/camera_status')
 def camera_status():
-    """Retorna o estado de alerts_enabled de todas as câmeras"""
-    return jsonify({cam_id: cfg.get("alerts_enabled", True) for cam_id, cfg in CAMERAS.items()})
+    """Retorna o estado de alertas e configs de todas as câmeras"""
+    return jsonify({
+        cam_id: {
+            "alerts_enabled": cfg.get("alerts_enabled", True),
+            "phone_number": cfg.get("phone_number", ""),
+            "name": cfg.get("name", "")
+        } for cam_id, cfg in CAMERAS.items()
+    })
+
+@app.route('/update_camera_settings/<cam_id>', methods=['POST'])
+def update_camera_settings(cam_id):
+    if cam_id not in CAMERAS:
+        return jsonify({"status": "error", "message": "Câmera não encontrada"})
+    data = request.json
+    if 'phone_number' in data:
+        CAMERAS[cam_id]['phone_number'] = data['phone_number']
+    persist_roi_config()
+    return jsonify({"status": "success"})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
