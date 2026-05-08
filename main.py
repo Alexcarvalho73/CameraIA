@@ -11,6 +11,7 @@ from detector import detect_green_stain, detect_hand, detect_operator, BlobTrack
 try:
     import oracledb
     ORACLE_AVAILABLE = True
+    try:
         instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
         oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
         
