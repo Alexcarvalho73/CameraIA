@@ -87,53 +87,121 @@ def detect_hand(frame):
             hands.append({'rect': (x, y, w, h), 'center': (x + w//2, y + h//2), 'area': area})
     return hands
 
+def _detect_glove_regions(hsv_full_frame):
+    """
+    Detecta regiões de luva amarela na imagem inteira.
+    Retorna lista de bounding boxes (x, y, w, h) das luvas encontradas.
+    Usado para suprimir falsos positivos em detect_green_stain.
+    """
+    # CAMADA 1: Range ampliado para cobrir todo o espectro do amarelo fluorescente
+    # As luvas variam bastante dependendo da iluminação da câmera
+    lower_glove = np.array([18, 80, 80])    # Amarelo-esverdeado até amarelo puro
+    upper_glove = np.array([38, 255, 255])  # Cobre toda a faixa vibrante
+    glove_mask = cv2.inRange(hsv_full_frame, lower_glove, upper_glove)
+
+    kernel = np.ones((9, 9), np.uint8)
+    glove_mask = cv2.morphologyEx(glove_mask, cv2.MORPH_CLOSE, kernel)
+    glove_mask = cv2.morphologyEx(glove_mask, cv2.MORPH_OPEN, kernel)
+
+    contours, _ = cv2.findContours(glove_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    regions = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 500:
+            continue
+        x, y, w, h = cv2.boundingRect(cnt)
+        regions.append((x, y, w, h))
+    return regions
+
+
+def _stain_overlaps_glove(stain_rect, glove_regions, expand_px=60):
+    """
+    CAMADA 2: Rejeita manchas que se sobrepõem ou estão muito próximas de uma luva.
+    A luva é expandida em `expand_px` pixels em todas as direções para cobrir o braço.
+    """
+    sx, sy, sw, sh = stain_rect
+    for (gx, gy, gw, gh) in glove_regions:
+        # Expande a região da luva para cobrir o antebraço adjacente
+        ex = max(0, gx - expand_px)
+        ey = max(0, gy - expand_px)
+        ew = gw + 2 * expand_px
+        eh = gh + 2 * expand_px
+        # Checa sobreposição de retângulos
+        if sx < ex + ew and sx + sw > ex and sy < ey + eh and sy + sh > ey:
+            return True
+    return False
+
+
 def detect_green_stain(frame, roi_polygon):
     """
-    Detects green stains within a specific ROI.
+    Detecta manchas de fel (líquido biliar) dentro de uma ROI específica.
+
+    Sistema anti-falso-positivo em 3 camadas:
+      1. Inibição ampla de cor de luva amarela (range HSV expandido)
+      2. Validação contextual: rejeita manchas próximas a regiões de luva/braço detectados
+      3. Filtros de morfologia: área mínima elevada + penalização de formas compactas
+         (luvas são pequenas e quadradas; fel espalhado é grande e irregular)
     """
-    # Create a mask for the ROI
+    # Máscara da ROI
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
-    
-    # Apply ROI mask to the frame
+
     roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
-    
-    # Convert to HSV for better color segmentation
-    hsv = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
-    
-    # Espectro ampliado para capturar o líquido da biles (que varia entre verde e amarelo)
-    lower_full = np.array([20, 50, 30])
-    upper_full = np.array([95, 255, 255])
-    full_mask = cv2.inRange(hsv, lower_full, upper_full)
-    
-    # Inibição de Amarelo Fluorescente (Luvas) - Mantida bem restrita
-    lower_glove = np.array([22, 160, 160])
-    upper_glove = np.array([35, 255, 255])
-    glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
-    
-    # Remove a luva mas mantém o verde/amarelo do líquido
-    green_mask = cv2.subtract(full_mask, glove_mask)
-    
-    # Clean up the mask (remove noise)
-    kernel = np.ones((7,7), np.uint8)
-    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_OPEN, kernel)
-    green_mask = cv2.morphologyEx(green_mask, cv2.MORPH_CLOSE, kernel)
-    
-    # Find contours of the green stains
-    contours, _ = cv2.findContours(green_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
+    # HSV do frame completo (para detectar luvas fora da ROI que invadem ela)
+    hsv_full  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # HSV apenas da ROI (para detectar mancha de fel)
+    hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
+
+    # ── CAMADA 1: Detecção de luvas no frame inteiro ───────────────────────────
+    glove_regions = _detect_glove_regions(hsv_full)
+
+    # ── Espectro do fel (verde-amarelado a verde puro) ─────────────────────────
+    # Estreitamos o limite inferior para excluir amarelos puros (luvas)
+    # Fel real é mais esverdeado: H entre 30 e 95
+    lower_fel = np.array([30, 40, 30])   # Começa no amarelo-esverdeado (H≥30)
+    upper_fel = np.array([95, 255, 255]) # Até verde puro
+    fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
+
+    # Inibição adicional: remove pixels que são amarelo puro/fluorescente (luvas)
+    lower_glove_inh = np.array([18, 80, 80])
+    upper_glove_inh = np.array([38, 255, 255])
+    glove_inh_mask  = cv2.inRange(hsv_roi, lower_glove_inh, upper_glove_inh)
+    fel_mask = cv2.subtract(fel_mask, glove_inh_mask)
+
+    # ── Limpeza morfológica: kernel maior para eliminar ruído pontual ──────────
+    kernel = np.ones((9, 9), np.uint8)
+    fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_OPEN,  kernel)
+    fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(fel_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
-        
-        # Reduzido para capturar jatos pequenos e rápidos de líquido
-        if area < 800:
+
+        # ── CAMADA 3a: Área mínima elevada ────────────────────────────────────
+        # Luvas têm ~800-3000 px²; fel derramado visível tem >3500 px²
+        if area < 3500:
             continue
-            
+
+        # ── CAMADA 3b: Filtro de compacidade (aspect ratio) ───────────────────
+        # Luvas são compactas (w≈h). Fel espalhado é mais irregular e largo.
+        # Rejeita blobs muito quadrados e pequenos (padrão de luva compacta)
+        aspect = max(w, h) / max(min(w, h), 1)
+        if area < 6000 and aspect < 1.3:
+            # Blob pequeno E quadrado → provavelmente luva, rejeita
+            continue
+
+        # ── CAMADA 2: Validação contextual (proximidade com luva) ─────────────
+        if _stain_overlaps_glove((x, y, w, h), glove_regions, expand_px=70):
+            # A mancha está sobre ou muito perto de uma luva detectada → FP
+            continue
+
         detections.append({'rect': (x, y, w, h), 'area': area})
-            
-    return detections, green_mask
+
+    return detections, fel_mask
 
 
 if __name__ == "__main__":
