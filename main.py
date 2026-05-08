@@ -143,9 +143,13 @@ ORACLE_WALLET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'D
 def insert_alert_to_db(phone, message, frame):
     """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
     if not ORACLE_AVAILABLE:
-        print("[DB] Ignorando gravação: oracledb não disponível.")
+        print(f"[DB] CANCELADO: oracledb não instalado no servidor. Alerta: {message}")
         return
-    if not phone or frame is None:
+    if not phone:
+        print(f"[DB] CANCELADO: Telefone não configurado para este alerta. Alerta: {message}")
+        return
+    if frame is None:
+        print(f"[DB] CANCELADO: Frame inválido. Alerta: {message}")
         return
     
     # Redimensiona para economia de espaço no banco (640x360)
@@ -159,7 +163,7 @@ def insert_alert_to_db(phone, message, frame):
             conn = oracledb.connect(
                 user="mensagem",
                 password="crbsAcs@2026",
-                dsn="imaculado_low",
+                dsn="imaculado",
                 config_dir=ORACLE_WALLET_PATH,
                 wallet_location=ORACLE_WALLET_PATH
             )
@@ -300,8 +304,8 @@ def trigger_alert(message, frame, cam_id, record_video=True):
 
     # Gravação no Banco de Dados Oracle
     phone = cam_cfg.get("phone_number")
-    if phone:
-        insert_alert_to_db(phone, message, frame)
+    print(f"[{cam_id}] Tentando registrar alerta no banco (Fone: {phone or 'N/A'})...")
+    insert_alert_to_db(phone, message, frame)
 
     if record_video:
         # Gravação automática de 15 s
