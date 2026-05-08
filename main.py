@@ -582,6 +582,21 @@ def save_roi(cam_id):
         print(f"[{cam_id}] ROI principal salvo: {points}")
         return jsonify({"status": "success", "roi": points})
 
+@app.route('/update_camera_settings/<cam_id>', methods=['POST'])
+def update_camera_settings(cam_id):
+    """Atualiza configurações específicas da câmera (ex: telefone)."""
+    if cam_id not in CAMERAS:
+        return jsonify({"status": "error", "message": "Câmera não encontrada"}), 404
+    
+    data = request.json
+    if 'phone_number' in data:
+        CAMERAS[cam_id]['phone_number'] = data['phone_number']
+        persist_roi_config()
+        print(f"[{cam_id}] Telefone atualizado para: {data['phone_number']}")
+        return jsonify({"status": "success", "phone_number": data['phone_number']})
+    
+    return jsonify({"status": "error", "message": "Dados inválidos"}), 400
+
 @app.route('/get_roi/<cam_id>')
 def get_roi(cam_id):
     """Retorna ROI principal e todas as zonas da câmera."""
