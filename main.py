@@ -204,8 +204,8 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
-    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
+    "camera_01": BlobTracker(min_frames=5, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=5, max_jump_px=110),
 }
 
 
@@ -539,7 +539,7 @@ def video_stream_thread(cam_id):
             if cam_id in last_roi_frames:
                 diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
                 movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                is_moving = movement > 1.5 # Limiar de movimento
+                is_moving = movement > 1.0 # Limiar de movimento
             last_roi_frames[cam_id] = roi_gray
 
             candidates, _ = detect_green_stain(frame, roi_points)

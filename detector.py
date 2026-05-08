@@ -247,7 +247,7 @@ def detect_green_stain(frame, roi_polygon):
     # Cor do fel: amarelo-esverdeado (H=30) até verde puro (H=90)
     # Hue >= 30 exclui a gordura bege (que é mais alaranjada/H<30)
     # S>=20 permite captar bile mesmo que diluída
-    lower_fel = np.array([30, 20, 100])
+    lower_fel = np.array([30, 20, 20])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
 
