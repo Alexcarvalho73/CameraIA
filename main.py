@@ -262,10 +262,14 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     """
     Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
     """
-    # Agora busca o operador no QUADRO TODO para evitar falsos alertas de abandono
-    operator = detect_operator(frame, None) 
-    hands    = detect_hand(frame)
-    now      = time.time()
+    # 1. Busca operador na área de trabalho (para regras de comportamento)
+    op_work = detect_operator(frame, np.array(zones["work_area"]))
+    
+    # 2. Busca qualquer sinal de operador no quadro todo (para regra de abandono)
+    op_any = detect_operator(frame, None)
+    
+    hands = detect_hand(frame)
+    now   = time.time()
 
     # ── Desenho das Zonas
     zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255),
@@ -332,18 +336,23 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     if not hand_in_cofre:
         state_data["hand_in_cofre_since"] = 0
 
-    # ── REGRA 4: Operador se Abaixou (Condicional 5s)
-    if operator:
+    # ── REGRA 4: Operador se Abaixou (Suspeita de esconder pedra no sapato)
+    # Só valida se o operador principal (op_work) estiver na zona inferior extrema
+    if op_work:
         time_since_furo = now - state_data["last_furo_time"]
-        if operator['center'][1] > 950:
-            if time_since_furo < 5:
-                msg = "POSTURA SUSPEITA: Abaixou imediatamente após furo!"
+        # Limiar aumentado para 1000 (quase no limite inferior do quadro)
+        if op_work['center'][1] > 1000:
+            # Validação extra: mãos também devem estar baixas (perto dos pés)
+            hands_low = any(h['center'][1] > 950 for h in hands)
+            if time_since_furo < 7 and hands_low:
+                msg = "POSTURA CRÍTICA: Abaixou-se nos pés após o furo!"
                 trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
                 add_audit_log(msg)
-        state_data["last_helmet_y"] = operator['center'][1]
+        state_data["last_helmet_y"] = op_work['center'][1]
 
     # ── REGRA 5: Abandono / Ausência Prolongada (> 10s)
-    if not operator:
+    # Aqui usamos o op_any: só conta ausência se NÃO houver ninguém em lugar nenhum do quadro
+    if not op_any:
         if state_data["operator_absent_since"] == 0:
             state_data["operator_absent_since"] = now
     else:
@@ -376,8 +385,11 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     cv2.putText(frame, f"STATUS: {status_txt}", (710, 1050),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
-    if operator:
-        cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
+    if op_work:
+        cv2.circle(frame, op_work['center'], 20, (255, 255, 255), 2)
+    elif op_any:
+        # Se ele não está na work_area mas está na sala, desenha em cinza
+        cv2.circle(frame, op_any['center'], 15, (150, 150, 150), 1)
 
     return frame
 
