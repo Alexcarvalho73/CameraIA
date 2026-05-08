@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+alerts/
+uploads/
+roi_config.json
+.vscode/
+.idea/
+*.mp4
+*.avi
+*.jpg
