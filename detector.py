@@ -307,13 +307,18 @@ def detect_stone(frame, roi_points, bg_gray, hands=[], fel_mask=None):
     
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
+    stone_detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
         # Pedra biliar: entre 800 e 8000 pixels
         if 800 < area < 8000:
-            return True, thresh
+            x, y, w, h = cv2.boundingRect(cnt)
+            stone_detections.append({'rect': (x, y, w, h), 'area': area})
             
-    return False, thresh
+    if stone_detections:
+        return True, thresh, stone_detections
+            
+    return False, thresh, []
 
 
 if __name__ == "__main__":

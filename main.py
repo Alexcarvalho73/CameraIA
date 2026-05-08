@@ -85,14 +85,16 @@ audit_state = {
     "camera_02": {
         "process_active": False,
         "stone_suspected": False,
+        "stone_photo_taken": False,  # Flag para tirar apenas 1 foto por ciclo
         "last_furo_time": 0,
         "hand_in_cofre_since": 0,
-        "operator_absent_since": 0, # Início do tempo de ausência
+        "operator_absent_since": 0,
         "last_helmet_y": 0,
     },
     "test_audit": {
         "process_active": False,
         "stone_suspected": False,
+        "stone_photo_taken": False,
         "last_furo_time": 0,
         "hand_in_cofre_since": 0,
         "operator_absent_since": 0,
@@ -199,7 +201,7 @@ load_existing_alerts()
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPARO DE ALERTA
 # ─────────────────────────────────────────────────────────────────────────────
-def trigger_alert(message, frame, cam_id):
+def trigger_alert(message, frame, cam_id, record_video=True):
     # Verifica se os alertas estão habilitados para essa câmera
     cam_cfg = CAMERAS.get(cam_id, {})
     if not cam_cfg.get("alerts_enabled", True):
@@ -219,8 +221,11 @@ def trigger_alert(message, frame, cam_id):
     img_path    = os.path.join("alerts", img_name)
     cv2.imwrite(img_path, frame)
 
-    vid_name = f"event_{cam_id}_{timestamp}.avi"
-    vid_path = os.path.join("alerts", vid_name)
+    vid_url = None
+    if record_video:
+        vid_name = f"event_{cam_id}_{timestamp}.avi"
+        vid_path = os.path.join("alerts", vid_name)
+        vid_url  = f"/alerts_files/{vid_name}"
 
     alert_data = {
         "id":        len(alert_history) + 1,
@@ -229,7 +234,7 @@ def trigger_alert(message, frame, cam_id):
         "camera":    CAMERAS.get(cam_id, {}).get("name", "Simulador de Teste"),
         "message":   message,
         "image_url": f"/alerts_files/{img_name}",
-        "video_url": f"/alerts_files/{vid_name}"   # avi servido normalmente
+        "video_url": vid_url
     }
 
     alert_history.insert(0, alert_data)
@@ -238,22 +243,22 @@ def trigger_alert(message, frame, cam_id):
 
     print(f"ALERTA [{cam_id}]: {message}")
 
-    # Gravação automática de 20 s
-    def auto_record():
-        # Codec XVID com extensão .avi é o mais robusto para Linux/OpenCV
-        fourcc = cv2.VideoWriter_fourcc(*'XVID')
-        out    = cv2.VideoWriter(vid_path, fourcc, 15.0, (640, 360))
-        end_t  = time.time() + 15
-        while time.time() < end_t:
-            with lock:
-                if cam_id in latest_frames and latest_frames[cam_id] is not None:
-                    resized = cv2.resize(latest_frames[cam_id], (640, 360))
-                    out.write(resized)
-            time.sleep(0.06)
-        out.release()
-        print(f"Auto-gravação concluída: {vid_name}")
+    if record_video:
+        # Gravação automática de 15 s
+        def auto_record():
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            out    = cv2.VideoWriter(vid_path, fourcc, 15.0, (640, 360))
+            end_t  = time.time() + 15
+            while time.time() < end_t:
+                with lock:
+                    if cam_id in latest_frames and latest_frames[cam_id] is not None:
+                        resized = cv2.resize(latest_frames[cam_id], (640, 360))
+                        out.write(resized)
+                time.sleep(0.06)
+            out.release()
+            print(f"Auto-gravação concluída: {vid_name}")
 
-    threading.Thread(target=auto_record, daemon=True).start()
+        threading.Thread(target=auto_record, daemon=True).start()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MOTOR DE AUDITORIA DE ANOMALIAS – Câmera 02
@@ -299,7 +304,7 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     # Detecção de Pedra: busca objeto sólido filtrando mãos e fel
     bg = cofre_backgrounds.get(cam_id)
     # Passamos hands e fel_mask para o detector ignorar esses objetos
-    has_stone, stone_mask = detect_stone(frame, cofre_pts, bg, hands=hands, fel_mask=fel_mask)
+    has_stone, stone_mask, stone_dets = detect_stone(frame, cofre_pts, bg, hands=hands, fel_mask=fel_mask)
     
     if has_stone and state_data["process_active"]:
         # Só marca pedra se for logo após o furo (janela de 10s)
@@ -307,6 +312,20 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
             if not state_data["stone_suspected"]:
                 state_data["stone_suspected"] = True
                 add_audit_log("ALERTA: PEDRA BILIAR DETECTADA!")
+                
+                # USER REQUEST: Tira apenas uma foto (sem vídeo) com a área identificada
+                if not state_data.get("stone_photo_taken", False):
+                    # Faz uma cópia para desenhar o marcador de calibração
+                    calib_frame = frame.copy()
+                    for det in stone_dets:
+                        x, y, w, h = det['rect']
+                        cv2.rectangle(calib_frame, (x, y), (x+w, y+h), (255, 0, 255), 3)
+                        cv2.putText(calib_frame, "AREA DA PEDRA", (x, y - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+                    
+                    trigger_alert("CALIBRACAO: Pedra identificada no cofre", calib_frame, cam_id, record_video=False)
+                    state_data["stone_photo_taken"] = True
+
             cv2.putText(frame, "PEDRA SUSPEITA!", (820, 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
@@ -391,12 +410,14 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
                 add_audit_log(msg)
                 # Reseta para não disparar em loop
                 state_data["process_active"] = False 
+                state_data["stone_photo_taken"] = False
                 state_data["operator_absent_since"] = 0
         
         # Timeout do ciclo (se ninguém fugiu, encerra após 30s)
-        elif time_since_furo > 30:
-            state_data["process_active"]  = False
-            state_data["stone_suspected"] = False
+        elif now - state_data["last_furo_time"] > 30:
+            state_data["process_active"]    = False
+            state_data["stone_suspected"]   = False
+            state_data["stone_photo_taken"] = False
             add_audit_log("Ciclo de inspeção encerrado (Normal).")
 
     # ── Status na tela
@@ -478,8 +499,8 @@ def video_stream_thread(cam_id):
 # ─────────────────────────────────────────────────────────────────────────────
 # ROTAS FLASK
 # ─────────────────────────────────────────────────────────────────────────────
-def trigger_alert_wrapper(message, frame, cam_id):
-    trigger_alert(message, frame, cam_id)
+def trigger_alert_wrapper(message, frame, cam_id, record_video=True):
+    trigger_alert(message, frame, cam_id, record_video=record_video)
 
 @app.route('/')
 def index():

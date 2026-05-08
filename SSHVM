@@ -1,8 +1,11 @@
 ip: 10.200.16.96
 Logon: rdt
 Senha: SRV4l3x4ndr3
+
 SSH frigorifico
 
 cd /home/rdt/CameraIA && ./atualizar.sh
 
 git add . ; git commit -m "Calibracao: reducao de limiar e espectro de cor para manchas parciais" ; git push origin main ; ssh frigorifico "cd /home/rdt/CameraIA && ./atualizar.sh"
+
+scp frigorifico:/home/rdt/CameraIA/alerts/*.jpg .
