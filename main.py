@@ -11,12 +11,13 @@ from detector import detect_green_stain, detect_hand, detect_operator, BlobTrack
 try:
     import oracledb
     ORACLE_AVAILABLE = True
-    # Ativa o modo Thick para suportar Auto-login Wallet (cwallet.sso)
-    try:
         instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
         oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
+        
+        # Garante que as variáveis de ambiente estejam no processo atual
         os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
         os.environ['TNS_ADMIN'] = oracle_wallet_path
+        
         if os.path.exists(instant_client_path):
             oracledb.init_oracle_client(lib_dir=instant_client_path)
             print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
@@ -234,8 +235,11 @@ def insert_alert_to_db(phone, message, frame):
             _, img_encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
             img_bytes = img_encoded.tobytes()
             
+            # String de conexão direta (DSN completo) que funcionou no teste
+            dsn_direto = '(description=(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))'
+            
             conn = oracledb.connect(
-                user="mensagem", password="crbsAcs@2026", dsn="imaculado",
+                user="mensagem", password="crbsAcs@2026", dsn=dsn_direto,
                 config_dir=ORACLE_WALLET_PATH, wallet_location=ORACLE_WALLET_PATH
             )
             cursor = conn.cursor()
