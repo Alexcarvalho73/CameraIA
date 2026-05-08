@@ -262,7 +262,8 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     """
     Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
     """
-    operator = detect_operator(frame, np.array(zones["work_area"]))
+    # Agora busca o operador no QUADRO TODO para evitar falsos alertas de abandono
+    operator = detect_operator(frame, None) 
     hands    = detect_hand(frame)
     now      = time.time()
 

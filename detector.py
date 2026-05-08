@@ -127,16 +127,16 @@ def detect_operator(frame, roi_points=None):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1200 and area < 7000:
+        # Aumentado limite máximo (capacete de cima parece grande)
+        if area > 1000 and area < 30000: 
             x, y, w, h = cv2.boundingRect(cnt)
             center = (x + w // 2, y + h // 2)
-            if center[1] > 900:
-                continue
+            
+            # Filtro de circularidade levemente mais permissivo
             perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
-                continue
+            if perimeter == 0: continue
             circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > 0.6:
+            if circularity > 0.4:
                 return {'center': center, 'rect': (x, y, w, h)}
     return None
 
