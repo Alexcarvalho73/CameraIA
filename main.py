@@ -85,17 +85,19 @@ load_roi_config()
 # ─────────────────────────────────────────────────────────────────────────────
 audit_state = {
     "camera_02": {
-        "process_active": False,   # True quando bile detectada no cofre
-        "stone_suspected": False,  # True se detectamos algo sólido com a bile
-        "last_furo_time": 0,       # Timestamp do último furo
-        "hand_in_cofre_since": 0,  # Timestamp início mão dentro do cofre
-        "last_helmet_y": 0,        # Última posição Y do capacete
+        "process_active": False,
+        "stone_suspected": False,
+        "last_furo_time": 0,
+        "hand_in_cofre_since": 0,
+        "operator_absent_since": 0, # Início do tempo de ausência
+        "last_helmet_y": 0,
     },
     "test_audit": {
         "process_active": False,
         "stone_suspected": False,
         "last_furo_time": 0,
         "hand_in_cofre_since": 0,
+        "operator_absent_since": 0,
         "last_helmet_y": 0,
     }
 }
@@ -339,20 +341,33 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
                 add_audit_log(msg)
         state_data["last_helmet_y"] = operator['center'][1]
 
-    # ── REGRA 5: Abandono Imediato (Fuga com Pedra)
+    # ── REGRA 5: Abandono / Ausência Prolongada (> 10s)
+    if not operator:
+        if state_data["operator_absent_since"] == 0:
+            state_data["operator_absent_since"] = now
+    else:
+        state_data["operator_absent_since"] = 0
+
     if state_data["process_active"]:
-        time_since = now - state_data["last_furo_time"]
-        if time_since < 3 and state_data["last_helmet_y"] > 0:
-            if not operator:
-                msg = "FUGA: Operador saiu da vista logo após furo!"
-                if state_data["stone_suspected"]: msg = "CRÍTICO: Fuga com possível Pedra Biliar!"
+        time_since_furo = now - state_data["last_furo_time"]
+        
+        # Verifica se está ausente há mais de 10 segundos
+        if state_data["operator_absent_since"] > 0:
+            absent_duration = now - state_data["operator_absent_since"]
+            if absent_duration > 10:
+                msg = f"FUGA: Operador ausente por {int(absent_duration)}s!"
+                if state_data["stone_suspected"]: msg = "CRÍTICO: Abandono de local com suspeita de Pedra!"
                 trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
                 add_audit_log(msg)
-                state_data["process_active"] = False
-        elif time_since > 10:
+                # Reseta para não disparar em loop
+                state_data["process_active"] = False 
+                state_data["operator_absent_since"] = 0
+        
+        # Timeout do ciclo (se ninguém fugiu, encerra após 30s)
+        elif time_since_furo > 30:
             state_data["process_active"]  = False
             state_data["stone_suspected"] = False
-            add_audit_log("Ciclo de inspeção encerrado.")
+            add_audit_log("Ciclo de inspeção encerrado (Normal).")
 
     # ── Status na tela
     status_txt = "SUSPEITA DE PEDRA" if state_data["stone_suspected"] else "MONITORANDO"
