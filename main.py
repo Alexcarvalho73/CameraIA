@@ -6,7 +6,7 @@ import threading
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
+from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker, detect_stone
 
 app = Flask(__name__)
 CORS(app)
@@ -135,8 +135,9 @@ blob_trackers = {
 }
 
 
-# Cache para detecção de movimento da esteira
+# Cache para detecção de movimento e fundo do cofre
 last_roi_frames = {} 
+cofre_backgrounds = {} # bg_gray para cada câmera
 
 
 
@@ -218,7 +219,7 @@ def trigger_alert(message, frame, cam_id):
     img_path    = os.path.join("alerts", img_name)
     cv2.imwrite(img_path, frame)
 
-    vid_name = f"event_{cam_id}_{timestamp}.mp4"
+    vid_name = f"event_{cam_id}_{timestamp}.avi"
     vid_path = os.path.join("alerts", vid_name)
 
     alert_data = {
@@ -228,7 +229,7 @@ def trigger_alert(message, frame, cam_id):
         "camera":    CAMERAS.get(cam_id, {}).get("name", "Simulador de Teste"),
         "message":   message,
         "image_url": f"/alerts_files/{img_name}",
-        "video_url": f"/alerts_files/{vid_name}"   # sempre disponível desde o início
+        "video_url": f"/alerts_files/{vid_name}"   # avi servido normalmente
     }
 
     alert_history.insert(0, alert_data)
@@ -239,15 +240,16 @@ def trigger_alert(message, frame, cam_id):
 
     # Gravação automática de 20 s
     def auto_record():
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out    = cv2.VideoWriter(vid_path, fourcc, 20.0, (640, 360))
-        end_t  = time.time() + 20
+        # Codec XVID com extensão .avi é o mais robusto para Linux/OpenCV
+        fourcc = cv2.VideoWriter_fourcc(*'XVID')
+        out    = cv2.VideoWriter(vid_path, fourcc, 15.0, (640, 360))
+        end_t  = time.time() + 15
         while time.time() < end_t:
             with lock:
                 if cam_id in latest_frames and latest_frames[cam_id] is not None:
                     resized = cv2.resize(latest_frames[cam_id], (640, 360))
                     out.write(resized)
-            time.sleep(0.05)
+            time.sleep(0.06)
         out.release()
         print(f"Auto-gravação concluída: {vid_name}")
 
@@ -282,23 +284,35 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
         cv2.putText(frame, zname.upper(), (pts[0][0], pts[0][1]-5),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-    # ── REGRA 1: Início de Ciclo e Suspeita de Pedra Biliar
-    green_det, _ = detect_green_stain(frame, np.array(zones["cofre"]))
+    # ── REGRA 1: Início de Ciclo e Detecção de Pedra Biliar (Objeto Sólido)
+    cofre_pts = np.array(zones["cofre"])
+    green_det, _ = detect_green_stain(frame, cofre_pts)
+    
     if green_det:
         if not state_data["process_active"]:
             state_data["process_active"] = True
             add_audit_log("CICLO INICIADO: Bile detectada no cofre.")
-        
         state_data["last_furo_time"] = now
-        
-        # Tentativa simples de identificar pedra: blob muito grande ou múltiplos blobs
-        if len(green_det) > 1 or any(d['area'] > 5000 for d in green_det):
-            if not state_data["stone_suspected"]:
-                state_data["stone_suspected"] = True
-                add_audit_log("ALERTA: Possível PEDRA BILIAR identificada!")
-        
         cv2.putText(frame, "BILE NO COFRE", (820, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+    
+    # Detecção de Pedra: busca objeto sólido se houver fundo salvo
+    bg = cofre_backgrounds.get(cam_id)
+    has_stone, stone_mask = detect_stone(frame, cofre_pts, bg)
+    
+    if has_stone and state_data["process_active"]:
+        # Só marca pedra se for logo após o furo (janela de 10s)
+        if now - state_data["last_furo_time"] < 10:
+            if not state_data["stone_suspected"]:
+                state_data["stone_suspected"] = True
+                add_audit_log("ALERTA: PEDRA BILIAR DETECTADA!")
+            cv2.putText(frame, "PEDRA SUSPEITA!", (820, 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+
+    # Atualiza o fundo do cofre quando estiver limpo por 3 segundos
+    if not green_det and (now - state_data["last_furo_time"] > 3):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cofre_backgrounds[cam_id] = cv2.GaussianBlur(gray, (21, 21), 0)
 
     # ── REGRA 2: Mão na Cintura/Bolso (Anomalia de Roubo)
     # Detecta se a mão amarela está na altura da cintura E alinhada lateralmente

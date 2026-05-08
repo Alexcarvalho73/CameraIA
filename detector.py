@@ -269,6 +269,42 @@ def detect_green_stain(frame, roi_polygon):
     return detections, fel_mask
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE PEDRA (Objeto Sólido por Diferença de Fundo)
+# ─────────────────────────────────────────────────────────────────────────────
+def detect_stone(frame, roi_points, bg_gray):
+    """
+    Detecta objetos sólidos no cofre comparando com um fundo limpo.
+    Retorna True se houver um objeto estranho significativo.
+    """
+    if bg_gray is None: return False, None
+    
+    # Mascara a ROI
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask, [roi_points], 255)
+    
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (21, 21), 0)
+    
+    # Diferença absoluta entre fundo e frame atual
+    diff = cv2.absdiff(bg_gray, gray)
+    _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+    thresh = cv2.bitwise_and(thresh, mask)
+    
+    # Limpeza
+    kernel = np.ones((5,5), np.uint8)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 1200: # Tamanho mínimo de uma pedra biliar
+            return True, thresh
+            
+    return False, thresh
+
+
 if __name__ == "__main__":
     print("Iniciando motor de detecção...")
     roi_points = np.array([[100, 100], [450, 50], [550, 800], [50, 900]], np.int32)
