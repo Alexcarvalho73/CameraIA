@@ -260,8 +260,11 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     """
     Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
     """
+    # No modo de teste, o cam_id é 'test_feed'. Precisamos do ID real da câmera para pegar o ROI.
+    target_cam = cam_id if cam_id in CAMERAS else test_video_rule or "camera_02"
+    
     # 1. Busca operador na área principal (ROI da câmera)
-    main_roi = np.array(CAMERAS[cam_id]["roi"])
+    main_roi = np.array(CAMERAS[target_cam]["roi"])
     op_work  = detect_operator(frame, main_roi)
     
     # 2. Busca qualquer sinal de operador no quadro todo (para regra de abandono)
