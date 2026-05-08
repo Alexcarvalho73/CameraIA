@@ -2,175 +2,271 @@ import cv2
 import numpy as np
 
 # Estados para Auditoria da Câmera 02
-STATE_IDLE = "IDLE"
-STATE_LIVER = "LIVER_READY"
-STATE_LEANING = "LEANING"  # Debruçado sobre a esteira
-STATE_PICKED = "PICKED"
-STATE_COFRE = "COFRE"
-STATE_WASTE = "WASTE"
+STATE_IDLE    = "IDLE"
+STATE_LIVER   = "LIVER_READY"
+STATE_LEANING = "LEANING"
+STATE_PICKED  = "PICKED"
+STATE_COFRE   = "COFRE"
+STATE_WASTE   = "WASTE"
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BLOB TRACKER – discrimina fel (estático) de luvas (movimento errático)
+# ─────────────────────────────────────────────────────────────────────────────
+class BlobTracker:
+    """
+    Rastreador temporal de blobs para diferenciar fel de luvas.
+
+    Princípio observado:
+      - Luva: aparece/some rapidamente ou pula de posição frame a frame.
+      - Fel:  permanece no mesmo local (ou desliza linearmente com a esteira)
+              por vários frames consecutivos.
+
+    Um blob só é "confirmado" após ser visto por `min_frames` consecutivos
+    sem pular mais de `max_jump_px` pixels entre frames.
+    """
+
+    def __init__(self, min_frames=7, max_jump_px=110):
+        """
+        min_frames  : frames consecutivos necessários para confirmar fel (~0.35 s a 20 FPS)
+        max_jump_px : deslocamento máximo entre frames para ser o mesmo blob
+        """
+        self.candidates  = []
+        self.min_frames  = min_frames
+        self.max_jump_px = max_jump_px
+
+    def update(self, detections):
+        """
+        Atualiza o rastreador com as detecções do frame atual.
+
+        Args:
+            detections: lista de dicts {'rect': (x,y,w,h), 'area': int}
+
+        Returns:
+            Lista de detecções confirmadas como fel (blobs persistentes).
+        """
+        current = []
+        for det in detections:
+            x, y, w, h = det['rect']
+            current.append({
+                'cx': x + w // 2,
+                'cy': y + h // 2,
+                'rect': det['rect'],
+                'area': det['area'],
+            })
+
+        new_candidates  = []
+        matched_current = set()
+
+        # Associa candidatos existentes a detecções atuais
+        for cand in self.candidates:
+            best_idx  = None
+            best_dist = self.max_jump_px
+
+            for i, cur in enumerate(current):
+                if i in matched_current:
+                    continue
+                dist = ((cand['cx'] - cur['cx']) ** 2 +
+                        (cand['cy'] - cur['cy']) ** 2) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx  = i
+
+            if best_idx is not None:
+                matched_current.add(best_idx)
+                cur = current[best_idx]
+                new_candidates.append({
+                    'cx':     cur['cx'],
+                    'cy':     cur['cy'],
+                    'rect':   cur['rect'],
+                    'area':   cur['area'],
+                    'frames': cand['frames'] + 1,
+                })
+            # candidato sumiu → descarta (não carrega para o próximo frame)
+
+        # Blobs novos sem correspondência anterior
+        for i, cur in enumerate(current):
+            if i not in matched_current:
+                new_candidates.append({
+                    'cx':     cur['cx'],
+                    'cy':     cur['cy'],
+                    'rect':   cur['rect'],
+                    'area':   cur['area'],
+                    'frames': 1,
+                })
+
+        self.candidates = new_candidates
+
+        # Retorna apenas os confirmados
+        confirmed = [c for c in self.candidates if c['frames'] >= self.min_frames]
+        return [{'rect': c['rect'], 'area': c['area'], 'frames': c['frames']}
+                for c in confirmed]
+
+    def reset(self):
+        self.candidates = []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE OPERADOR (capacete branco)
+# ─────────────────────────────────────────────────────────────────────────────
 def detect_operator(frame, roi_points=None):
-    """Detecta o capacete branco do operador de forma rigorosa"""
+    """Detecta o capacete branco do operador de forma rigorosa."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # Branco (Capacete) - Filtro mais restrito
     lower_white = np.array([0, 0, 210])
     upper_white = np.array([180, 30, 255])
     mask = cv2.inRange(hsv, lower_white, upper_white)
-    
-    # Se houver ROI, limita a busca
+
     if roi_points is not None:
         roi_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
         cv2.fillPoly(roi_mask, [roi_points], 255)
         mask = cv2.bitwise_and(mask, roi_mask)
 
-    kernel = np.ones((5,5), np.uint8)
+    kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        # O capacete tem um tamanho bem específico na câmera
         if area > 1200 and area < 7000:
             x, y, w, h = cv2.boundingRect(cnt)
-            center = (x + w//2, y + h//2)
-            
-            # Filtro de Altura: Capacete nunca está no chão (Y > 900 é chão)
+            center = (x + w // 2, y + h // 2)
             if center[1] > 900:
                 continue
-
-            # Verificação de Circularidade (Capacete é redondo)
             perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0: continue
+            if perimeter == 0:
+                continue
             circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            
-            if circularity > 0.6: # 1.0 é um círculo perfeito
+            if circularity > 0.6:
                 return {'center': center, 'rect': (x, y, w, h)}
     return None
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE FÍGADO
+# ─────────────────────────────────────────────────────────────────────────────
 def detect_liver(frame, roi_points):
-    """Detecta a presença de fígado (carne escura) na zona de coleta"""
+    """Detecta a presença de fígado (carne escura) na zona de coleta."""
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [roi_points], 255)
-    
+
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # Vermelho Escuro / Roxo (Fígado)
     lower1 = np.array([0, 30, 20])
     upper1 = np.array([15, 150, 100])
     lower2 = np.array([150, 30, 20])
     upper2 = np.array([180, 150, 100])
-    
+
     m1 = cv2.inRange(hsv, lower1, upper1)
     m2 = cv2.inRange(hsv, lower2, upper2)
     mask_liver = cv2.bitwise_and(cv2.bitwise_or(m1, m2), mask)
-    
-    area = np.sum(mask_liver > 0)
-    return area > 5000 # Retorna True se houver massa de fígado significativa
 
+    area = np.sum(mask_liver > 0)
+    return area > 5000
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE LUVAS (para rastreamento e auditoria Câmera 02)
+# ─────────────────────────────────────────────────────────────────────────────
 def detect_hand(frame):
-    """Detecta a posição das luvas amarelas do operador"""
+    """Detecta a posição das luvas amarelas do operador."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # Range da luva amarela (vibrante)
     lower_yellow = np.array([20, 100, 100])
     upper_yellow = np.array([38, 255, 255])
     mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-    
-    kernel = np.ones((5,5), np.uint8)
+
+    kernel = np.ones((5, 5), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    
+
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
+
     hands = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1500: # Mão do operador tem um tamanho mínimo
+        if area > 1500:
             x, y, w, h = cv2.boundingRect(cnt)
-            hands.append({'rect': (x, y, w, h), 'center': (x + w//2, y + h//2), 'area': area})
+            hands.append({'rect': (x, y, w, h),
+                          'center': (x + w // 2, y + h // 2),
+                          'area': area})
     return hands
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUXILIARES INTERNOS
+# ─────────────────────────────────────────────────────────────────────────────
 def _detect_glove_regions(hsv_full_frame):
     """
-    Detecta regiões de luva amarela na imagem inteira.
-    Retorna lista de bounding boxes (x, y, w, h) das luvas encontradas.
-    Usado para suprimir falsos positivos em detect_green_stain.
+    Localiza regiões de luva amarela no frame inteiro.
+    Usado para rejeição espacial em detect_green_stain.
     """
-    # CAMADA 1: Range ampliado para cobrir todo o espectro do amarelo fluorescente
-    # As luvas variam bastante dependendo da iluminação da câmera
-    lower_glove = np.array([18, 80, 80])    # Amarelo-esverdeado até amarelo puro
-    upper_glove = np.array([38, 255, 255])  # Cobre toda a faixa vibrante
+    lower_glove = np.array([18, 90, 90])
+    upper_glove = np.array([38, 255, 255])
     glove_mask = cv2.inRange(hsv_full_frame, lower_glove, upper_glove)
 
     kernel = np.ones((9, 9), np.uint8)
     glove_mask = cv2.morphologyEx(glove_mask, cv2.MORPH_CLOSE, kernel)
-    glove_mask = cv2.morphologyEx(glove_mask, cv2.MORPH_OPEN, kernel)
+    glove_mask = cv2.morphologyEx(glove_mask, cv2.MORPH_OPEN,  kernel)
 
     contours, _ = cv2.findContours(glove_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     regions = []
     for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 500:
+        if cv2.contourArea(cnt) < 500:
             continue
         x, y, w, h = cv2.boundingRect(cnt)
         regions.append((x, y, w, h))
     return regions
 
 
-def _stain_overlaps_glove(stain_rect, glove_regions, expand_px=60):
+def _stain_overlaps_glove(stain_rect, glove_regions, expand_px=30):
     """
-    CAMADA 2: Rejeita manchas que se sobrepõem ou estão muito próximas de uma luva.
-    A luva é expandida em `expand_px` pixels em todas as direções para cobrir o braço.
+    Rejeita manchas que estão LITERALMENTE sobre uma luva detectada.
+    Expansão reduzida (30 px) — não rejeita fel que está perto de operadores,
+    apenas fel que coincide com o pixel da luva.
     """
     sx, sy, sw, sh = stain_rect
     for (gx, gy, gw, gh) in glove_regions:
-        # Expande a região da luva para cobrir o antebraço adjacente
         ex = max(0, gx - expand_px)
         ey = max(0, gy - expand_px)
         ew = gw + 2 * expand_px
         eh = gh + 2 * expand_px
-        # Checa sobreposição de retângulos
         if sx < ex + ew and sx + sw > ex and sy < ey + eh and sy + sh > ey:
             return True
     return False
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE FEL – retorna CANDIDATOS (validação temporal feita pelo BlobTracker)
+# ─────────────────────────────────────────────────────────────────────────────
 def detect_green_stain(frame, roi_polygon):
     """
-    Detecta manchas de fel (líquido biliar) dentro de uma ROI específica.
+    Detecta candidatos de mancha de fel dentro da ROI.
 
-    Sistema anti-falso-positivo em 3 camadas:
-      1. Inibição ampla de cor de luva amarela (range HSV expandido)
-      2. Validação contextual: rejeita manchas próximas a regiões de luva/braço detectados
-      3. Filtros de morfologia: área mínima elevada + penalização de formas compactas
-         (luvas são pequenas e quadradas; fel espalhado é grande e irregular)
+    ⚠️  Esta função retorna CANDIDATOS brutos de cor.
+        A confirmação final (se é fel ou luva) é feita pelo BlobTracker
+        em main.py, que exige persistência temporal de ~7 frames (~0.35 s).
+
+    Estratégia de cor:
+      - Range: H=20-90 cobre amarelo-esverdeado até verde puro (bile real)
+      - NÃO subtraímos máscara de luva aqui — isso removia a bile junto.
+        A rejeição de luva é feita apenas por posição espacial (expand=30px).
+      - Área mínima baixa (1200 px²) — o tracker cuida dos falsos positivos.
     """
-    # Máscara da ROI
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
-
     roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
 
-    # HSV do frame completo (para detectar luvas fora da ROI que invadem ela)
-    hsv_full  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # HSV apenas da ROI (para detectar mancha de fel)
-    hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
+    hsv_full = cv2.cvtColor(frame,     cv2.COLOR_BGR2HSV)
+    hsv_roi  = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
 
-    # ── CAMADA 1: Detecção de luvas no frame inteiro ───────────────────────────
+    # Detecção de luvas no frame inteiro (para rejeição espacial)
     glove_regions = _detect_glove_regions(hsv_full)
 
-    # ── Espectro do fel (verde-amarelado a verde puro) ─────────────────────────
-    # Estreitamos o limite inferior para excluir amarelos puros (luvas)
-    # Fel real é mais esverdeado: H entre 30 e 95
-    lower_fel = np.array([30, 40, 30])   # Começa no amarelo-esverdeado (H≥30)
-    upper_fel = np.array([95, 255, 255]) # Até verde puro
+    # Máscara de cor do fel: amarelo-esverdeado → verde
+    # H=20 (amarelo) a H=90 (verde), saturação e valor mínimos para excluir cinzas
+    lower_fel = np.array([20, 60, 60])
+    upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
 
-    # Inibição adicional: remove pixels que são amarelo puro/fluorescente (luvas)
-    lower_glove_inh = np.array([18, 80, 80])
-    upper_glove_inh = np.array([38, 255, 255])
-    glove_inh_mask  = cv2.inRange(hsv_roi, lower_glove_inh, upper_glove_inh)
-    fel_mask = cv2.subtract(fel_mask, glove_inh_mask)
-
-    # ── Limpeza morfológica: kernel maior para eliminar ruído pontual ──────────
-    kernel = np.ones((9, 9), np.uint8)
+    # Limpeza morfológica (kernel 7x7 — remove ruído sem destruir manchas pequenas)
+    kernel   = np.ones((7, 7), np.uint8)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_OPEN,  kernel)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_CLOSE, kernel)
 
@@ -181,22 +277,12 @@ def detect_green_stain(frame, roi_polygon):
         area = cv2.contourArea(cnt)
         x, y, w, h = cv2.boundingRect(cnt)
 
-        # ── CAMADA 3a: Área mínima elevada ────────────────────────────────────
-        # Luvas têm ~800-3000 px²; fel derramado visível tem >3500 px²
-        if area < 3500:
+        # Área mínima — exclui ruído de 1-2 pixels mas aceita manchas pequenas
+        if area < 1200:
             continue
 
-        # ── CAMADA 3b: Filtro de compacidade (aspect ratio) ───────────────────
-        # Luvas são compactas (w≈h). Fel espalhado é mais irregular e largo.
-        # Rejeita blobs muito quadrados e pequenos (padrão de luva compacta)
-        aspect = max(w, h) / max(min(w, h), 1)
-        if area < 6000 and aspect < 1.3:
-            # Blob pequeno E quadrado → provavelmente luva, rejeita
-            continue
-
-        # ── CAMADA 2: Validação contextual (proximidade com luva) ─────────────
-        if _stain_overlaps_glove((x, y, w, h), glove_regions, expand_px=70):
-            # A mancha está sobre ou muito perto de uma luva detectada → FP
+        # Rejeição espacial: blob literalmente sobre uma luva → descarta
+        if _stain_overlaps_glove((x, y, w, h), glove_regions, expand_px=30):
             continue
 
         detections.append({'rect': (x, y, w, h), 'area': area})
@@ -205,23 +291,11 @@ def detect_green_stain(frame, roi_polygon):
 
 
 if __name__ == "__main__":
-    # Test with a dummy image or prompt user to provide one
     print("Iniciando motor de detecção...")
-    # ROI based on the red lines in the user's image (approximate coordinates)
-    # We will need a way to let the user define this visually in the dashboard
-    roi_points = np.array([
-        [100, 100], [450, 50], [550, 800], [50, 900]
-    ], np.int32)
-    
-    # Load test image
-    image_path = 'test_image.jpg'
-    frame = cv2.imread(image_path)
-    
+    roi_points = np.array([[100, 100], [450, 50], [550, 800], [50, 900]], np.int32)
+    frame = cv2.imread('test_image.jpg')
     if frame is not None:
         detections, mask = detect_green_stain(frame, roi_points)
-        if detections:
-            print(f"ALERTA: {len(detections)} rompimento(s) de fel detectado(s)!")
-        else:
-            print("Nenhum rompimento detectado.")
+        print(f"Candidatos: {len(detections)} (precisam de 7 frames para confirmar)")
     else:
-        print(f"Arquivo {image_path} não encontrado. Coloque uma imagem de teste na pasta.")
+        print("Arquivo test_image.jpg não encontrado.")

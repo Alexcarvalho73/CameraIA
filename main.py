@@ -6,7 +6,7 @@ import threading
 import numpy as np
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operator
+from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
 
 app = Flask(__name__)
 CORS(app)
@@ -118,13 +118,19 @@ CONFIG = {
     "last_alert_time": {}
 }
 
-alert_history  = []
-latest_frames  = {}
+alert_history    = []
+latest_frames    = {}
 recording_states = {}          # cam_id → cv2.VideoWriter | None
 lock = threading.Lock()
 
 test_video_rule  = None
 test_video_speed = 1.0
+
+# BlobTrackers por câmera — exigem persistência temporal para confirmar fel
+blob_trackers = {
+    "camera_01": BlobTracker(min_frames=7, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=7, max_jump_px=110),
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CARREGA ALERTAS DO DIA DO DISCO
@@ -355,11 +361,16 @@ def video_stream_thread(cam_id):
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
-            detections, _ = detect_green_stain(frame, roi_points)
-            for det in detections:
+            candidates, _ = detect_green_stain(frame, roi_points)
+            tracker  = blob_trackers.get(cam_id)
+            confirmed = tracker.update(candidates) if tracker else candidates
+            for det in confirmed:
                 x, y, w, h = det['rect']
+                frames_txt = det.get('frames', '')
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-            if detections:
+                cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            if confirmed:
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
 
         elif cam_cfg["type"] == "behavior_detection":
@@ -609,11 +620,15 @@ def video_feed(cam_id):
             state_key  = "test_audit"
 
             if cam_cfg["type"] == "color_detection":
-                detections, _ = detect_green_stain(frame, roi_points)
-                for det in detections:
+                candidates, _ = detect_green_stain(frame, roi_points)
+                tracker   = blob_trackers.get("test_feed")
+                confirmed = tracker.update(candidates) if tracker else candidates
+                for det in confirmed:
                     x, y, w, h = det['rect']
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                if detections:
+                    cv2.putText(frame, f"FEL ({det.get('frames','')}f)", (x, y - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                if confirmed:
                     cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)",
                                 (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
