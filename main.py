@@ -9,13 +9,17 @@ try:
     ORACLE_AVAILABLE = True
     # Ativa o modo Thick para suportar Auto-login Wallet (cwallet.sso) sem senha PEM
     try:
-        # Tenta inicializar com o caminho do Instant Client instalado na VM
         instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
+        oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
+        
+        # Define variáveis de ambiente explicitamente para o modo Thick
+        os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+        os.environ['TNS_ADMIN'] = oracle_wallet_path
+        
         if os.path.exists(instant_client_path):
             oracledb.init_oracle_client(lib_dir=instant_client_path)
             print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
         else:
-            # Caso local ou caminho diferente, tenta sem lib_dir (presume que está no PATH)
             oracledb.init_oracle_client()
             print("[DB] Oracle Thick Mode ativado.")
     except Exception as e:
@@ -204,8 +208,8 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=5, max_jump_px=110),
-    "test_feed":  BlobTracker(min_frames=5, max_jump_px=110),
+    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
 }
 
 
@@ -539,7 +543,7 @@ def video_stream_thread(cam_id):
             if cam_id in last_roi_frames:
                 diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
                 movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                is_moving = movement > 1.0 # Limiar de movimento
+                is_moving = movement > 1.5 # Limiar de movimento
             last_roi_frames[cam_id] = roi_gray
 
             candidates, _ = detect_green_stain(frame, roi_points)
