@@ -1,4 +1,4 @@
-import cv2
+﻿import cv2
 import numpy as np
 import time
 import os
@@ -28,14 +28,14 @@ try:
         print(f"[DB] Erro ao ativar modo Thick: {e}")
 except ImportError:
     ORACLE_AVAILABLE = False
-    print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
+    print("[AVISO] oracledb nÃ£o encontrado. IntegraÃ§Ã£o com banco de dados desativada.")
 
 app = Flask(__name__)
 CORS(app)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO DAS CÂMERAS E MOTOR
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# CONFIGURAÃ‡ÃƒO DAS CÃ‚MERAS E MOTOR
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 CAMERAS = {
     "camera_01": {
         "name": "Esteira Principal - Ruptura",
@@ -46,7 +46,7 @@ CAMERAS = {
         "phone_number": ""
     },
     "camera_02": {
-        "name": "Cofre - Fluxo de Vesícula",
+        "name": "Cofre - Fluxo de VesÃ­cula",
         "rtsp_url": "rtsp://admin:013579ab@10.200.96.81:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[700, 20], [1900, 20], [1900, 1000], [700, 1000]],
         "zones": {
@@ -78,7 +78,7 @@ def load_roi_config():
             if 'phone_number' in cfg: CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
                 for zn, pts in cfg['zones'].items(): CAMERAS[cam_id]['zones'][zn] = pts
-        print(f"[ROI] Configurações carregadas de '{ROI_CONFIG_FILE}'.")
+        print(f"[ROI] ConfiguraÃ§Ãµes carregadas de '{ROI_CONFIG_FILE}'.")
     except Exception as e: print(f"[ROI] Erro ao carregar: {e}")
 
 def persist_roi_config():
@@ -114,13 +114,13 @@ def add_audit_log(msg):
     if len(audit_logs) > 50: audit_logs.pop()
     print(f"[AUDIT] {msg}")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # BANCO DE DADOS ORACLE
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def insert_alert_to_db(phone, message, frame):
     if not ORACLE_AVAILABLE: return
     if not phone or frame is None:
-        print(f"[DB] CANCELADO: Telefone não configurado. Alerta: {message}")
+        print(f"[DB] CANCELADO: Telefone nÃ£o configurado. Alerta: {message}")
         return
     
     def run_insert():
@@ -146,9 +146,9 @@ def insert_alert_to_db(phone, message, frame):
             
     threading.Thread(target=run_insert, daemon=True).start()
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # DISPARO DE ALERTA
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def trigger_alert(message, frame, cam_id):
     cam_cfg = CAMERAS.get(cam_id, {})
     if not cam_cfg.get("alerts_enabled", True): return
@@ -171,7 +171,7 @@ def trigger_alert(message, frame, cam_id):
     alert_history.insert(0, alert_data)
     if len(alert_history) > 100: alert_history.pop()
 
-    # Gravação no Banco
+    # GravaÃ§Ã£o no Banco
     phone = cam_cfg.get("phone_number")
     if cam_id == "test_feed":
         phone = CAMERAS.get(test_video_rule, {}).get("phone_number")
@@ -186,9 +186,9 @@ def trigger_alert(message, frame, cam_id):
     insert_alert_to_db(phone, message, frame)
     print(f"ALERTA [{cam_id}]: {message}")
 
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # THREADS E ROTAS (Resumido para o essencial da 157f0b3)
-# ─────────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 def video_stream_thread(cam_id):
     cam_cfg = CAMERAS[cam_id]
     cap = cv2.VideoCapture(cam_cfg["rtsp_url"])
@@ -274,7 +274,7 @@ def video_feed(cam_id):
             cam_cfg = CAMERAS.get(test_video_rule, CAMERAS["camera_01"])
             roi_points = np.array(cam_cfg["roi"], np.int32)
             
-            # Detecção no teste (simplificada mas fiel à 157f0b3)
+            # DetecÃ§Ã£o no teste (simplificada mas fiel Ã  157f0b3)
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             cv2.fillPoly(mask, [roi_points], 255)
             roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
