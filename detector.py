@@ -215,23 +215,6 @@ def _detect_glove_regions(hsv_full_frame):
     return regions
 
 
-def _stain_overlaps_glove(stain_rect, glove_regions, expand_px=30):
-    """
-    Rejeita manchas que estão LITERALMENTE sobre uma luva detectada.
-    Expansão reduzida (30 px) — não rejeita fel que está perto de operadores,
-    apenas fel que coincide com o pixel da luva.
-    """
-    sx, sy, sw, sh = stain_rect
-    for (gx, gy, gw, gh) in glove_regions:
-        ex = max(0, gx - expand_px)
-        ey = max(0, gy - expand_px)
-        ew = gw + 2 * expand_px
-        eh = gh + 2 * expand_px
-        if sx < ex + ew and sx + sw > ex and sy < ey + eh and sy + sh > ey:
-            return True
-    return False
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # DETECÇÃO DE FEL – retorna CANDIDATOS (validação temporal feita pelo BlobTracker)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,33 +222,26 @@ def detect_green_stain(frame, roi_polygon):
     """
     Detecta candidatos de mancha de fel dentro da ROI.
 
-    ⚠️  Esta função retorna CANDIDATOS brutos de cor.
-        A confirmação final (se é fel ou luva) é feita pelo BlobTracker
-        em main.py, que exige persistência temporal de ~7 frames (~0.35 s).
+    Discriminação luva vs. fel é feita EXCLUSIVAMENTE pelo BlobTracker
+    em main.py (persistência temporal):
+      - Luva: movimento errático, blob desaparece/salta frame a frame
+      - Fel:  estático (ou desliza com a esteira), persiste vários frames
 
-    Estratégia de cor:
-      - Range: H=20-90 cobre amarelo-esverdeado até verde puro (bile real)
-      - NÃO subtraímos máscara de luva aqui — isso removia a bile junto.
-        A rejeição de luva é feita apenas por posição espacial (expand=30px).
-      - Área mínima baixa (1200 px²) — o tracker cuida dos falsos positivos.
+    Não há check espacial de luva aqui — bile cai exatamente onde o
+    operador trabalha, então luvas sempre estariam próximas do fel real.
     """
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
     roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
+    hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
 
-    hsv_full = cv2.cvtColor(frame,     cv2.COLOR_BGR2HSV)
-    hsv_roi  = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
-
-    # Detecção de luvas no frame inteiro (para rejeição espacial)
-    glove_regions = _detect_glove_regions(hsv_full)
-
-    # Máscara de cor do fel: amarelo-esverdeado → verde
-    # H=20 (amarelo) a H=90 (verde), saturação e valor mínimos para excluir cinzas
-    lower_fel = np.array([20, 60, 60])
+    # Cor do fel: amarelo-esverdeado (H=20) até verde puro (H=90)
+    # S e V mínimos em 50 para excluir sombras e cinzas
+    lower_fel = np.array([20, 50, 50])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
 
-    # Limpeza morfológica (kernel 7x7 — remove ruído sem destruir manchas pequenas)
+    # Limpeza morfológica — remove ruído sem destruir manchas reais
     kernel   = np.ones((7, 7), np.uint8)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_OPEN,  kernel)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_CLOSE, kernel)
@@ -275,16 +251,9 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
+        if area < 1000:   # remove ruído pontual
+            continue
         x, y, w, h = cv2.boundingRect(cnt)
-
-        # Área mínima — exclui ruído de 1-2 pixels mas aceita manchas pequenas
-        if area < 1200:
-            continue
-
-        # Rejeição espacial: blob literalmente sobre uma luva → descarta
-        if _stain_overlaps_glove((x, y, w, h), glove_regions, expand_px=30):
-            continue
-
         detections.append({'rect': (x, y, w, h), 'area': area})
 
     return detections, fel_mask
@@ -296,6 +265,7 @@ if __name__ == "__main__":
     frame = cv2.imread('test_image.jpg')
     if frame is not None:
         detections, mask = detect_green_stain(frame, roi_points)
-        print(f"Candidatos: {len(detections)} (precisam de 7 frames para confirmar)")
+        print(f"Candidatos: {len(detections)} (precisam de 5 frames para confirmar)")
     else:
         print("Arquivo test_image.jpg não encontrado.")
+
