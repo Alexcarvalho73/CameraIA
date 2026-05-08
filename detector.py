@@ -276,7 +276,7 @@ def detect_stone(frame, roi_points, bg_gray, hands=[], fel_mask=None):
     """
     Detecta objetos sólidos no cofre filtrando mãos e bile líquida.
     """
-    if bg_gray is None: return False, None
+    if bg_gray is None: return False, None, []
     
     mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask, [roi_points], 255)
