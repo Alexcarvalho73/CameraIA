@@ -29,8 +29,6 @@ CAMERAS = {
         "zones": {
             "cofre":     [[800, 20],  [1150, 20],  [1150, 300], [800, 300]],
             "descarte":  [[850, 320], [1150, 320], [1150, 600], [850, 600]],
-            "pockets":   [[850, 650], [1150, 650], [1150, 900], [850, 900]],
-            "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]]
         },
         "type": "behavior_detection",
         "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
@@ -262,8 +260,9 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     """
     Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
     """
-    # 1. Busca operador na área de trabalho (para regras de comportamento)
-    op_work = detect_operator(frame, np.array(zones["work_area"]))
+    # 1. Busca operador na área principal (ROI da câmera)
+    main_roi = np.array(CAMERAS[cam_id]["roi"])
+    op_work  = detect_operator(frame, main_roi)
     
     # 2. Busca qualquer sinal de operador no quadro todo (para regra de abandono)
     op_any = detect_operator(frame, None)
@@ -271,15 +270,14 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     hands = detect_hand(frame)
     now   = time.time()
 
-    # ── Desenho das Zonas
-    zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255),
-                   "pockets": (0, 165, 255), "work_area": (50, 50, 50)}
+    # ── Desenho das Zonas Ativas
+    zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255)}
     for zname, pts in zones.items():
-        color = zone_colors.get(zname, (255, 255, 0))
+        if zname not in zone_colors: continue
+        color = zone_colors[zname]
         cv2.polylines(frame, [np.array(pts)], True, color, 2)
-        if zname != "work_area":
-            cv2.putText(frame, zname.upper(), (pts[0][0], pts[0][1]-5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        cv2.putText(frame, zname.upper(), (pts[0][0], pts[0][1]-5),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
     # ── REGRA 1: Início de Ciclo e Suspeita de Pedra Biliar
     green_det, _ = detect_green_stain(frame, np.array(zones["cofre"]))
@@ -300,16 +298,19 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     # ── REGRA 2: Mão na Cintura/Bolso (Anomalia de Roubo)
-    pocket_pts = np.array(zones["pockets"])
-    for h in hands:
-        cx, cy = h['center']
-        if cv2.pointPolygonTest(pocket_pts, (float(cx), float(cy)), False) >= 0:
-            time_since = now - state_data["last_furo_time"]
-            if state_data["process_active"] or time_since < 15:
-                msg = "ROUBO: Mão no bolso com processo ativo!"
-                if state_data["stone_suspected"]: msg = "CRÍTICO: Furto de Pedra Biliar Suspeito!"
-                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                add_audit_log(msg)
+    # Detecta se a mão amarela está na altura da cintura do operador (Y abaixo do capacete)
+    if op_work:
+        helmet_y = op_work['center'][1]
+        for h in hands:
+            hx, hy = h['center']
+            # Se a mão estiver entre 150px e 400px abaixo do capacete (zona da cintura)
+            if (helmet_y + 150) < hy < (helmet_y + 450):
+                time_since = now - state_data["last_furo_time"]
+                if state_data["process_active"] or time_since < 15:
+                    msg = "ROUBO: Mão na região do bolso!"
+                    if state_data["stone_suspected"]: msg = "CRÍTICO: Furto de Pedra Suspeito!"
+                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                    add_audit_log(msg)
 
     # ── REGRA 3: Manipulação Excessiva / Mão Profunda (Furto)
     cofre_pts = np.array(zones["cofre"])
