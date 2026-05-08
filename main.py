@@ -43,7 +43,8 @@ CAMERAS = {
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[280, 375], [790, 320], [810, 710], [195, 750]],
         "type": "color_detection",
-        "alerts_enabled": True     # Câmera 01 com alertas ATIVOS
+        "alerts_enabled": True,     # Câmera 01 com alertas ATIVOS
+        "phone_number": "5511000000000" # Configure aqui o número real
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
@@ -56,7 +57,8 @@ CAMERAS = {
             "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]]
         },
         "type": "behavior_detection",
-        "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
+        "alerts_enabled": False,    # Câmera 02 com alertas PAUSADOS
+        "phone_number": "5511000000000"
     }
 }
 
