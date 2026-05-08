@@ -79,6 +79,8 @@ def load_roi_config():
                 continue
             if 'roi' in cfg:
                 CAMERAS[cam_id]['roi'] = cfg['roi']
+            if 'phone_number' in cfg:
+                CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
                 for zone_name, pts in cfg['zones'].items():
                     CAMERAS[cam_id]['zones'][zone_name] = pts
@@ -94,6 +96,8 @@ def persist_roi_config():
             data[cam_id] = {}
             if 'roi' in cfg:
                 data[cam_id]['roi'] = cfg['roi']
+            if 'phone_number' in cfg:
+                data[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg:
                 data[cam_id]['zones'] = cfg['zones']
         with open(ROI_CONFIG_FILE, 'w') as f:
