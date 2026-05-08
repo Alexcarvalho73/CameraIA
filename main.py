@@ -301,13 +301,14 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
     # ── REGRA 2: Mão na Cintura/Bolso (Anomalia de Roubo)
-    # Detecta se a mão amarela está na altura da cintura do operador (Y abaixo do capacete)
+    # Detecta se a mão amarela está na altura da cintura E alinhada lateralmente
     if op_work:
-        helmet_y = op_work['center'][1]
+        helmet_x, helmet_y = op_work['center']
         for h in hands:
             hx, hy = h['center']
-            # Se a mão estiver entre 150px e 400px abaixo do capacete (zona da cintura)
-            if (helmet_y + 150) < hy < (helmet_y + 450):
+            # Se a mão estiver na zona de altura (150-450px abaixo) 
+            # E alinhada lateralmente (máx 150px de distância do centro)
+            if (helmet_y + 150) < hy < (helmet_y + 450) and abs(hx - helmet_x) < 150:
                 time_since = now - state_data["last_furo_time"]
                 if state_data["process_active"] or time_since < 15:
                     msg = "ROUBO: Mão na região do bolso!"

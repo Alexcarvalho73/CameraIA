@@ -181,7 +181,16 @@ def detect_hand(frame):
     hands = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1500:
+        # Limite de área para luvas: nem tão pequenas (ruído) nem tão grandes (capacete)
+        if 1500 < area < 8000:
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0: continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
+            
+            # Se for MUITO circular (circularity > 0.75), provavelmente é um capacete amarelo, não uma mão
+            if circularity > 0.75: 
+                continue
+                
             x, y, w, h = cv2.boundingRect(cnt)
             hands.append({'rect': (x, y, w, h),
                           'center': (x + w // 2, y + h // 2),
