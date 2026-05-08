@@ -321,6 +321,23 @@ def trigger_alert(message, frame, cam_id, record_video=True):
 
     # Gravação no Banco de Dados Oracle
     phone = cam_cfg.get("phone_number")
+    
+    # Se for o simulador, tenta pegar o telefone da regra sendo testada
+    if cam_id == "test_feed":
+        from flask import request
+        # test_video_rule é global
+        sim_cfg = CAMERAS.get(test_video_rule, {})
+        phone = sim_cfg.get("phone_number")
+        print(f"[test_feed] Usando telefone da regra {test_video_rule}: {phone or 'N/A'}")
+
+    # Fallback para telefone padrão se estiver vazio
+    if not phone:
+        # Tenta pegar de qualquer câmera que tenha telefone ou usa um valor fixo se desejar
+        for c in CAMERAS.values():
+            if c.get("phone_number"):
+                phone = c["phone_number"]
+                break
+    
     print(f"[{cam_id}] Tentando registrar alerta no banco (Fone: {phone or 'N/A'})...")
     insert_alert_to_db(phone, message, frame)
 
