@@ -8,6 +8,27 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
 
+try:
+    import oracledb
+    ORACLE_AVAILABLE = True
+    # Ativa o modo Thick para suportar Auto-login Wallet (cwallet.sso)
+    try:
+        instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
+        oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
+        os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+        os.environ['TNS_ADMIN'] = oracle_wallet_path
+        if os.path.exists(instant_client_path):
+            oracledb.init_oracle_client(lib_dir=instant_client_path)
+            print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
+        else:
+            oracledb.init_oracle_client()
+            print("[DB] Oracle Thick Mode ativado.")
+    except Exception as e:
+        print(f"[DB] Erro ao ativar modo Thick: {e}")
+except ImportError:
+    ORACLE_AVAILABLE = False
+    print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -194,6 +215,43 @@ def load_existing_alerts():
 load_existing_alerts()
 
 # ─────────────────────────────────────────────────────────────────────────────
+# BANCO DE DADOS ORACLE
+# ─────────────────────────────────────────────────────────────────────────────
+def insert_alert_to_db(phone, message, frame):
+    """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
+    if not ORACLE_AVAILABLE: return
+    if not phone or frame is None:
+        print(f"[DB] CANCELADO: Telefone não configurado para este alerta.")
+        return
+    
+    ORACLE_WALLET_PATH = "/home/rdt/CameraIA/DriveOracle"
+
+    def run_insert():
+        conn = None
+        try:
+            # Redimensiona para economia de espaço no banco (640x360)
+            resized = cv2.resize(frame, (640, 360))
+            _, img_encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            img_bytes = img_encoded.tobytes()
+            
+            conn = oracledb.connect(
+                user="mensagem", password="crbsAcs@2026", dsn="imaculado",
+                config_dir=ORACLE_WALLET_PATH, wallet_location=ORACLE_WALLET_PATH
+            )
+            cursor = conn.cursor()
+            sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
+            print(f"[DB] Executando INSERT para {phone}...")
+            cursor.execute(sql, [str(phone), str(message), 0, 'G', img_bytes])
+            conn.commit()
+            print(f"[DB] Alerta gravado com sucesso no Oracle.")
+        except Exception as e:
+            print(f"[DB] Erro Oracle: {e}")
+        finally:
+            if conn: conn.close()
+            
+    threading.Thread(target=run_insert, daemon=True).start()
+
+# ─────────────────────────────────────────────────────────────────────────────
 # DISPARO DE ALERTA
 # ─────────────────────────────────────────────────────────────────────────────
 def trigger_alert(message, frame, cam_id):
@@ -234,6 +292,28 @@ def trigger_alert(message, frame, cam_id):
         alert_history.pop()
 
     print(f"ALERTA [{cam_id}]: {message}")
+
+    # Gravação no Banco de Dados Oracle
+    phone = cam_cfg.get("phone_number")
+    
+    # Se for o simulador, tenta pegar o telefone da regra sendo testada
+    if cam_id == "test_feed":
+        sim_cfg = CAMERAS.get(test_video_rule, {})
+        phone = sim_cfg.get("phone_number")
+        if phone:
+            print(f"[test_feed] Usando telefone da regra {test_video_rule}: {phone}")
+
+    # Fallback se vazio
+    if not phone:
+        for c in CAMERAS.values():
+            if c.get("phone_number"):
+                phone = c["phone_number"]
+                break
+    
+    if phone:
+        insert_alert_to_db(phone, message, frame)
+    else:
+        print(f"[{cam_id}] Nenhuma regra de telefone encontrada para registrar no banco.")
 
     # Gravação automática de 20 s
     def auto_record():
