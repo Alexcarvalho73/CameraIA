@@ -128,9 +128,13 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=5, max_jump_px=110),
-    "test_feed":  BlobTracker(min_frames=5, max_jump_px=110),
+    "camera_01": BlobTracker(min_frames=20, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=20, max_jump_px=110),
 }
+
+# Cache para detecção de movimento da esteira
+last_roi_frames = {} 
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -362,17 +366,34 @@ def video_stream_thread(cam_id):
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
+            # ── Detecção de Movimento da Esteira ──
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(mask, [roi_points], 255)
+            roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
+            
+            is_moving = True
+            if cam_id in last_roi_frames:
+                diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
+                movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
+                is_moving = movement > 1.5 # Limiar de movimento
+            last_roi_frames[cam_id] = roi_gray
+
             candidates, _ = detect_green_stain(frame, roi_points)
             tracker  = blob_trackers.get(cam_id)
             confirmed = tracker.update(candidates) if tracker else candidates
+            
             for det in confirmed:
                 x, y, w, h = det['rect']
                 frames_txt = det.get('frames', '')
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
                 cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            if confirmed:
+            
+            if confirmed and is_moving:
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
+            elif confirmed and not is_moving:
+                cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
             frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
@@ -621,6 +642,17 @@ def video_feed(cam_id):
             state_key  = "test_audit"
 
             if cam_cfg["type"] == "color_detection":
+                # ── Detecção de Movimento (Teste) ──
+                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(mask, [roi_points], 255)
+                roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
+                is_moving = True
+                if "test_feed" in last_roi_frames:
+                    diff = cv2.absdiff(last_roi_frames["test_feed"], roi_gray)
+                    movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
+                    is_moving = movement > 1.5
+                last_roi_frames["test_feed"] = roi_gray
+
                 candidates, _ = detect_green_stain(frame, roi_points)
                 tracker   = blob_trackers.get("test_feed")
                 confirmed = tracker.update(candidates) if tracker else candidates
@@ -629,10 +661,14 @@ def video_feed(cam_id):
                     cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
                     cv2.putText(frame, f"FEL ({det.get('frames','')}f)", (x, y - 6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                if confirmed:
+                
+                if confirmed and is_moving:
                     cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)",
                                 (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
+                elif confirmed and not is_moving:
+                    cv2.putText(frame, "ESTEIRA PARADA (TESTE)", (50, 80),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             elif cam_cfg["type"] == "behavior_detection":
                 frame = run_behavior_audit(frame, "test_feed",
