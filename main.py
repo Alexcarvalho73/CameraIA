@@ -480,6 +480,57 @@ def set_test_speed():
     test_video_speed = float(request.json.get('speed', 1.0))
     return jsonify({"status": "success", "speed": test_video_speed})
 
+@app.route('/list_server_videos')
+def list_server_videos():
+    """Lista todos os vídeos .mp4 disponíveis no servidor (alerts/ e uploads/)."""
+    videos = []
+    search_dirs = [
+        ('alerts',  'alerts'),
+        ('uploads', 'uploads'),
+    ]
+    for folder, label in search_dirs:
+        if not os.path.exists(folder):
+            continue
+        for fname in os.listdir(folder):
+            if not fname.lower().endswith('.mp4'):
+                continue
+            fpath = os.path.join(folder, fname)
+            stat  = os.stat(fpath)
+            videos.append({
+                "filename": fname,
+                "folder":   label,
+                "path":     f"/{folder}/{fname}",   # URL relativa para servir
+                "size_mb":  round(stat.st_size / (1024 * 1024), 1),
+                "mtime":    stat.st_mtime,
+            })
+    # Ordena do mais recente para o mais antigo
+    videos.sort(key=lambda v: v["mtime"], reverse=True)
+    return jsonify(videos)
+
+@app.route('/use_server_video', methods=['POST'])
+def use_server_video():
+    """Aponta o motor de teste para um vídeo já existente no servidor."""
+    global test_video_rule
+    data     = request.json or {}
+    folder   = data.get('folder', 'alerts')
+    filename = data.get('filename', '')
+    rule     = data.get('rule', 'camera_01')
+
+    if not filename:
+        return jsonify({"status": "error", "message": "filename obrigatório"})
+
+    src_path = os.path.join(folder, filename)
+    if not os.path.exists(src_path):
+        return jsonify({"status": "error", "message": f"Arquivo não encontrado: {src_path}"})
+
+    # Copia para o slot de teste (sobrescreve) para reutilizar o generate_test()
+    os.makedirs('uploads', exist_ok=True)
+    import shutil
+    shutil.copy2(src_path, os.path.join('uploads', 'test_video.mp4'))
+    test_video_rule = rule
+    print(f"[TESTE] Usando vídeo do servidor: {src_path} → uploads/test_video.mp4 | Regra: {rule}")
+    return jsonify({"status": "success"})
+
 @app.route('/upload_video', methods=['POST'])
 def upload_video():
     global test_video_rule

@@ -326,7 +326,7 @@
             </nav>
 
             <div style="margin-top: 20px;">
-                <button onclick="document.getElementById('upload-modal').style.display='flex'" style="width: 100%; padding: 12px; background: rgba(79, 172, 254, 0.2); color: #4facfe; border: 1px solid #4facfe; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.3s;">
+                <button onclick="openUploadModal()" style="width: 100%; padding: 12px; background: rgba(79, 172, 254, 0.2); color: #4facfe; border: 1px solid #4facfe; border-radius: 8px; cursor: pointer; font-weight: 600; transition: 0.3s;">
                     <i class="fas fa-upload"></i> Testar Vídeo Local
                 </button>
             </div>
@@ -473,31 +473,60 @@
 
     <!-- Upload Modal -->
     <div id="upload-modal" class="modal">
-        <div class="modal-content" style="max-width: 400px;">
-            <span class="close-btn" onclick="document.getElementById('upload-modal').style.display='none'">&times;</span>
-            <h3 style="margin-bottom: 20px;">Carregar Vídeo de Teste</h3>
-            
-            <form id="upload-form" onsubmit="handleUpload(event)">
+        <div class="modal-content" style="max-width: 520px; background: #1e293b; border-radius: 16px; padding: 30px; border: 1px solid rgba(255,255,255,0.1);">
+            <span class="close-btn" onclick="document.getElementById('upload-modal').style.display='none'" style="position:absolute;top:-35px;right:0;color:white;font-size:28px;cursor:pointer;">&times;</span>
+            <h3 style="margin-bottom: 20px; font-size: 16px; color: var(--primary);">🎬 Carregar Vídeo de Teste</h3>
+
+            <!-- Abas -->
+            <div style="display: flex; gap: 0; margin-bottom: 20px; border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                <button id="tab-server" onclick="switchTab('server')" style="flex:1; padding: 10px; background: rgba(0,242,254,0.15); color: var(--primary); border: none; font-weight: 700; font-size: 13px; cursor: pointer; transition: 0.2s;">
+                    🖥️ Vídeos do Servidor
+                </button>
+                <button id="tab-local" onclick="switchTab('local')" style="flex:1; padding: 10px; background: transparent; color: rgba(255,255,255,0.5); border: none; font-weight: 600; font-size: 13px; cursor: pointer; transition: 0.2s; border-left: 1px solid rgba(255,255,255,0.1);">
+                    📁 Upload Local
+                </button>
+            </div>
+
+            <!-- Aba: Servidor -->
+            <div id="tab-panel-server">
                 <div style="margin-bottom: 15px;">
-                    <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Arquivo de Vídeo (.avi, .mp4)</label>
-                    <input type="file" id="video-file" accept="video/*" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white;">
-                </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Regra a ser testada</label>
-                    <select id="video-rule" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white; cursor: pointer;">
+                    <label style="display:block; margin-bottom:6px; font-size:12px; opacity:0.7;">Regra a ser testada</label>
+                    <select id="server-video-rule" style="width:100%; padding:9px; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.15); border-radius:6px; color:white; cursor:pointer;">
                         <option value="camera_01">Câmera 01 (Cor / Ruptura)</option>
                         <option value="camera_02">Câmera 02 (Comportamento / Cofre)</option>
                     </select>
                 </div>
-                
-                <button type="submit" id="btn-upload" style="width: 100%; padding: 12px; background: var(--success); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s;">
-                    Iniciar Teste
-                </button>
-                <div id="upload-status" style="margin-top: 10px; font-size: 12px; text-align: center; color: var(--success); display: none;">
-                    Enviando vídeo e iniciando teste...
+
+                <div id="server-video-list" style="max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;">
+                    <p style="color:#666; font-size:12px; text-align:center; padding: 20px 0;">Carregando vídeos do servidor...</p>
                 </div>
-            </form>
+                <div id="server-no-video" style="display:none; color:#666; font-size:12px; text-align:center; padding:20px 0;">
+                    Nenhum vídeo encontrado no servidor.<br>Use a aba "Upload Local" para enviar um vídeo.
+                </div>
+            </div>
+
+            <!-- Aba: Upload Local -->
+            <div id="tab-panel-local" style="display:none;">
+                <form id="upload-form" onsubmit="handleUpload(event)">
+                    <div style="margin-bottom: 15px;">
+                        <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Arquivo de Vídeo (.avi, .mp4)</label>
+                        <input type="file" id="video-file" accept="video/*" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white;">
+                    </div>
+                    <div style="margin-bottom: 20px;">
+                        <label style="display: block; margin-bottom: 5px; font-size: 12px; opacity: 0.8;">Regra a ser testada</label>
+                        <select id="video-rule" required style="width: 100%; padding: 10px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.2); border-radius: 5px; color: white; cursor: pointer;">
+                            <option value="camera_01">Câmera 01 (Cor / Ruptura)</option>
+                            <option value="camera_02">Câmera 02 (Comportamento / Cofre)</option>
+                        </select>
+                    </div>
+                    <button type="submit" id="btn-upload" style="width: 100%; padding: 12px; background: var(--success); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.2s;">
+                        Enviar e Iniciar Teste
+                    </button>
+                    <div id="upload-status" style="margin-top: 10px; font-size: 12px; text-align: center; color: var(--success); display: none;">
+                        Enviando vídeo e iniciando teste...
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 
@@ -577,12 +606,99 @@
             }
         }
 
+        // ── Modal de Vídeo: Controle de Abas ──────────────────────────────────
+        function openUploadModal() {
+            document.getElementById('upload-modal').style.display = 'flex';
+            switchTab('server');   // sempre abre na aba do servidor e carrega a lista
+        }
+
+        function switchTab(tab) {
+            const isServer = tab === 'server';
+            document.getElementById('tab-panel-server').style.display = isServer ? 'block' : 'none';
+            document.getElementById('tab-panel-local').style.display  = isServer ? 'none'  : 'block';
+
+            const btnServer = document.getElementById('tab-server');
+            const btnLocal  = document.getElementById('tab-local');
+            btnServer.style.background = isServer ? 'rgba(0,242,254,0.15)' : 'transparent';
+            btnServer.style.color      = isServer ? 'var(--primary)' : 'rgba(255,255,255,0.5)';
+            btnServer.style.fontWeight = isServer ? '700' : '600';
+            btnLocal.style.background  = isServer ? 'transparent' : 'rgba(0,242,254,0.15)';
+            btnLocal.style.color       = isServer ? 'rgba(255,255,255,0.5)' : 'var(--primary)';
+            btnLocal.style.fontWeight  = isServer ? '600' : '700';
+
+            if (isServer) loadServerVideos();
+        }
+
+        async function loadServerVideos() {
+            const listEl   = document.getElementById('server-video-list');
+            const emptyEl  = document.getElementById('server-no-video');
+            listEl.innerHTML = '<p style="color:#666;font-size:12px;text-align:center;padding:20px 0;">🔄 Carregando...</p>';
+            emptyEl.style.display = 'none';
+
+            try {
+                const res    = await fetch('/list_server_videos');
+                const videos = await res.json();
+
+                if (!videos || videos.length === 0) {
+                    listEl.innerHTML = '';
+                    emptyEl.style.display = 'block';
+                    return;
+                }
+
+                listEl.innerHTML = '';
+                videos.forEach(v => {
+                    const dt = new Date(v.mtime * 1000);
+                    const dtStr = dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+                    const folderLabel = v.folder === 'alerts' ? '📹 alerts' : '📁 uploads';
+                    const card = document.createElement('div');
+                    card.style.cssText = 'background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.08); border-radius:8px; padding:10px 14px; cursor:pointer; transition:background 0.2s; display:flex; justify-content:space-between; align-items:center; gap:10px;';
+                    card.onmouseover = () => card.style.background = 'rgba(0,242,254,0.08)';
+                    card.onmouseout  = () => card.style.background = 'rgba(255,255,255,0.04)';
+                    card.innerHTML = `
+                        <div style="min-width:0;">
+                            <p style="font-size:12px;font-weight:600;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;" title="${v.filename}">${v.filename}</p>
+                            <p style="font-size:10px;color:#64748b;margin-top:2px;">${folderLabel} &nbsp;·&nbsp; ${v.size_mb} MB &nbsp;·&nbsp; ${dtStr}</p>
+                        </div>
+                        <button onclick="useServerVideo('${v.folder}','${v.filename}')" style="flex-shrink:0; padding:7px 14px; background:var(--primary); color:#0f172a; border:none; border-radius:6px; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap;">
+                            ▶ Usar
+                        </button>
+                    `;
+                    listEl.appendChild(card);
+                });
+            } catch (e) {
+                listEl.innerHTML = '<p style="color:#ef4444;font-size:12px;text-align:center;padding:20px;">Erro ao conectar com o servidor.</p>';
+            }
+        }
+
+        async function useServerVideo(folder, filename) {
+            const rule = document.getElementById('server-video-rule').value;
+            try {
+                const res  = await fetch('/use_server_video', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder, filename, rule })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    document.getElementById('upload-modal').style.display = 'none';
+                    document.getElementById('camera-selector').value = 'test_feed';
+                    switchCamera('test_feed');
+                } else {
+                    alert('Erro: ' + data.message);
+                }
+            } catch (e) {
+                alert('Erro de conexão com o servidor.');
+            }
+        }
+
+        // ── Upload local (comportamento original) ─────────────────────────────
         async function handleUpload(e) {
             e.preventDefault();
             const fileInput = document.getElementById('video-file');
             const ruleSelect = document.getElementById('video-rule');
             const btn = document.getElementById('btn-upload');
             const status = document.getElementById('upload-status');
+
             
             if (fileInput.files.length === 0) return;
             
