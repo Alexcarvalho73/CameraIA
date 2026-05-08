@@ -235,9 +235,10 @@ def detect_green_stain(frame, roi_polygon):
     roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
     hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
 
-    # Cor do fel: amarelo-esverdeado (H=25) até verde puro (H=90)
-    # Ajustado para ignorar gordura bege (S<35) e focar em bile clara (V>=100)
-    lower_fel = np.array([25, 35, 100])
+    # Cor do fel: amarelo-esverdeado (H=30) até verde puro (H=90)
+    # Hue >= 30 exclui a gordura bege (que é mais alaranjada/H<30)
+    # S>=20 permite captar bile mesmo que diluída
+    lower_fel = np.array([30, 20, 100])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
 
