@@ -4,7 +4,13 @@ import json
 import time
 import threading
 import numpy as np
-import oracledb
+try:
+    import oracledb
+    ORACLE_AVAILABLE = True
+except ImportError:
+    ORACLE_AVAILABLE = False
+    print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
+
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
 from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker, detect_stone
@@ -136,6 +142,9 @@ ORACLE_WALLET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'D
 
 def insert_alert_to_db(phone, message, frame):
     """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
+    if not ORACLE_AVAILABLE:
+        print("[DB] Ignorando gravação: oracledb não disponível.")
+        return
     if not phone or frame is None:
         return
     
