@@ -1,9 +1,14 @@
-import os
 import cv2
-import json
-import time
-import threading
 import numpy as np
+import time
+import os
+import threading
+import json
+import shutil
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_cors import CORS
+from detector import detect_operator, run_behavior_audit, detect_green_stain, BlobTracker
+
 try:
     import oracledb
     ORACLE_AVAILABLE = True
@@ -11,11 +16,8 @@ try:
     try:
         instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
         oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
-        
-        # Define variáveis de ambiente explicitamente para o modo Thick
         os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
         os.environ['TNS_ADMIN'] = oracle_wallet_path
-        
         if os.path.exists(instant_client_path):
             oracledb.init_oracle_client(lib_dir=instant_client_path)
             print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
@@ -28,15 +30,11 @@ except ImportError:
     ORACLE_AVAILABLE = False
     print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
 
-from flask import Flask, Response, jsonify, request, send_from_directory
-from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker, detect_stone
-
 app = Flask(__name__)
 CORS(app)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO DAS CÂMERAS
+# CONFIGURAÇÃO DAS CÂMERAS E MOTOR
 # ─────────────────────────────────────────────────────────────────────────────
 CAMERAS = {
     "camera_01": {
@@ -45,7 +43,7 @@ CAMERAS = {
         "roi": [[280, 375], [790, 320], [810, 710], [195, 750]],
         "type": "color_detection",
         "alerts_enabled": True,
-        "phone_number": ""         # Número para notificações
+        "phone_number": ""
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
@@ -57,132 +55,84 @@ CAMERAS = {
         },
         "type": "behavior_detection",
         "alerts_enabled": False,
-        "phone_number": ""         # Número para notificações
+        "phone_number": ""
     }
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PERSISTÊNCIA DE ROI  (roi_config.json)
-# ─────────────────────────────────────────────────────────────────────────────
+CONFIG = {
+    "alert_cooldown": 15,
+    "last_alert_time": {}
+}
+
 ROI_CONFIG_FILE = "roi_config.json"
+ORACLE_WALLET_PATH = "/home/rdt/CameraIA/DriveOracle"
 
 def load_roi_config():
-    """Carrega ROIs salvos em disco e sobrepõe os padrões do código."""
-    if not os.path.exists(ROI_CONFIG_FILE):
-        return
+    if not os.path.exists(ROI_CONFIG_FILE): return
     try:
         with open(ROI_CONFIG_FILE, 'r') as f:
             saved = json.load(f)
         for cam_id, cfg in saved.items():
-            if cam_id not in CAMERAS:
-                continue
-            if 'roi' in cfg:
-                CAMERAS[cam_id]['roi'] = cfg['roi']
-            if 'phone_number' in cfg:
-                CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
+            if cam_id not in CAMERAS: continue
+            if 'roi' in cfg: CAMERAS[cam_id]['roi'] = cfg['roi']
+            if 'phone_number' in cfg: CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
-                for zone_name, pts in cfg['zones'].items():
-                    CAMERAS[cam_id]['zones'][zone_name] = pts
+                for zn, pts in cfg['zones'].items(): CAMERAS[cam_id]['zones'][zn] = pts
         print(f"[ROI] Configurações carregadas de '{ROI_CONFIG_FILE}'.")
-    except Exception as e:
-        print(f"[ROI] Erro ao carregar '{ROI_CONFIG_FILE}': {e}")
+    except Exception as e: print(f"[ROI] Erro ao carregar: {e}")
 
 def persist_roi_config():
-    """Salva o estado atual dos ROIs em disco."""
     try:
-        data = {}
-        for cam_id, cfg in CAMERAS.items():
-            data[cam_id] = {}
-            if 'roi' in cfg:
-                data[cam_id]['roi'] = cfg['roi']
-            if 'phone_number' in cfg:
-                data[cam_id]['phone_number'] = cfg['phone_number']
-            if 'zones' in cfg:
-                data[cam_id]['zones'] = cfg['zones']
-        with open(ROI_CONFIG_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-        print(f"[ROI] Configurações persistidas em '{ROI_CONFIG_FILE}'.")
-    except Exception as e:
-        print(f"[ROI] Erro ao salvar '{ROI_CONFIG_FILE}': {e}")
+        data = {cid: {"roi": cfg.get("roi", []), "zones": cfg.get("zones", {}), "phone_number": cfg.get("phone_number", "")} 
+                for cid, cfg in CAMERAS.items()}
+        with open(ROI_CONFIG_FILE, 'w') as f: json.dump(data, f, indent=2)
+    except Exception as e: print(f"[ROI] Erro ao salvar: {e}")
 
-# Carrega ROIs salvos ao iniciar (sobrepõe os padrões acima se existir arquivo)
 load_roi_config()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ESTADO DA AUDITORIA – Câmera 02
-# ─────────────────────────────────────────────────────────────────────────────
+# Trackers e estados
+blob_trackers = {
+    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
+}
 audit_state = {
-    "camera_02": {
-        "process_active": False,
-        "stone_suspected": False,
-        "stone_photo_taken": False,  # Flag para tirar apenas 1 foto por ciclo
-        "last_furo_time": 0,
-        "hand_in_cofre_since": 0,
-        "operator_absent_since": 0,
-        "last_helmet_y": 0,
-    },
-    "test_audit": {
-        "process_active": False,
-        "stone_suspected": False,
-        "stone_photo_taken": False,
-        "last_furo_time": 0,
-        "hand_in_cofre_since": 0,
-        "operator_absent_since": 0,
-        "last_helmet_y": 0,
-    }
+    "camera_02": {"process_active": False, "last_furo_time": 0},
+    "test_audit": {"process_active": False, "last_furo_time": 0}
 }
-
-# ─────────────────────────────────────────────────────────────────────────────
-# LOGS DE AUDITORIA (painel ao vivo)
-# ─────────────────────────────────────────────────────────────────────────────
 audit_logs = []
+alert_history = []
+latest_frames = {}
+recording_states = {}
+lock = threading.Lock()
+last_roi_frames = {}
+test_video_rule = "camera_01"
+test_video_speed = 1.0
 
-def add_audit_log(message):
-    global audit_logs
-    timestamp = time.strftime("%H:%M:%S")
-    audit_logs.insert(0, f"[{timestamp}] {message}")
-    if len(audit_logs) > 30:
-        audit_logs.pop()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURAÇÕES GERAIS
-# ─────────────────────────────────────────────────────────────────────────────
-CONFIG = {
-    "alert_cooldown": 20,      # segundos entre alertas da mesma câmera
-    "last_alert_time": {}
-}
+def add_audit_log(msg):
+    log_entry = {"time": time.strftime("%H:%M:%S"), "message": msg}
+    audit_logs.insert(0, log_entry)
+    if len(audit_logs) > 50: audit_logs.pop()
+    print(f"[AUDIT] {msg}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONEXÃO ORACLE
+# BANCO DE DADOS ORACLE
 # ─────────────────────────────────────────────────────────────────────────────
-ORACLE_WALLET_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'DriveOracle')
-
 def insert_alert_to_db(phone, message, frame):
-    """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
-    if not ORACLE_AVAILABLE:
-        print(f"[DB] CANCELADO: oracledb não instalado no servidor. Alerta: {message}")
+    if not ORACLE_AVAILABLE: return
+    if not phone or frame is None:
+        print(f"[DB] CANCELADO: Telefone não configurado. Alerta: {message}")
         return
-    if not phone:
-        print(f"[DB] CANCELADO: Telefone não configurado para este alerta. Alerta: {message}")
-        return
-    if frame is None:
-        print(f"[DB] CANCELADO: Frame inválido. Alerta: {message}")
-        return
-    
-    # Redimensiona para economia de espaço no banco (640x360)
-    resized = cv2.resize(frame, (640, 360))
-    _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    img_bytes = buffer.tobytes()
     
     def run_insert():
         conn = None
         try:
+            resized = cv2.resize(frame, (640, 360))
+            _, img_encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            img_bytes = img_encoded.tobytes()
+            
             conn = oracledb.connect(
-                user="mensagem",
-                password="crbsAcs@2026",
-                dsn="imaculado",
-                config_dir=ORACLE_WALLET_PATH,
-                wallet_location=ORACLE_WALLET_PATH
+                user="mensagem", password="crbsAcs@2026", dsn="imaculado",
+                config_dir=ORACLE_WALLET_PATH, wallet_location=ORACLE_WALLET_PATH
             )
             cursor = conn.cursor()
             sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
@@ -190,755 +140,173 @@ def insert_alert_to_db(phone, message, frame):
             cursor.execute(sql, [str(phone), str(message), 0, 'G', img_bytes])
             conn.commit()
             print(f"[DB] Alerta gravado com sucesso no Oracle.")
-        except Exception as e:
-            print(f"[DB] Erro Oracle: {e}")
+        except Exception as e: print(f"[DB] Erro Oracle: {e}")
         finally:
-            if conn:
-                conn.close()
-
+            if conn: conn.close()
+            
     threading.Thread(target=run_insert, daemon=True).start()
-
-alert_history    = []
-latest_frames    = {}
-recording_states = {}          # cam_id → cv2.VideoWriter | None
-lock = threading.Lock()
-
-test_video_rule  = None
-test_video_speed = 1.0
-
-# BlobTrackers por câmera — exigem persistência temporal para confirmar fel
-blob_trackers = {
-    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
-    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
-}
-
-
-# Cache para detecção de movimento e fundo do cofre
-last_roi_frames = {} 
-cofre_backgrounds = {} # bg_gray para cada câmera
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CARREGA ALERTAS DO DIA DO DISCO
-# ─────────────────────────────────────────────────────────────────────────────
-def load_existing_alerts():
-    global alert_history
-    if not os.path.exists("alerts"):
-        os.makedirs("alerts")
-        return
-
-    print("Carregando alertas existentes do dia...")
-    files = sorted(os.listdir("alerts"), reverse=True)
-    today_str = time.strftime("%Y%m%d")
-    loaded = 0
-
-    for filename in files:
-        if not (filename.startswith("alert_") and filename.endswith(".jpg")):
-            continue
-        try:
-            parts = filename.replace("alert_", "").replace(".jpg", "").split("_")
-            cam_id = "camera_01"
-            date_part = ""
-            time_part = ""
-
-            if len(parts) >= 2 and parts[0].startswith("camera"):
-                cam_id   = f"{parts[0]}_{parts[1]}"
-                date_part = parts[2].split("-")[0]
-                time_part = parts[2].split("-")[1]
-            elif len(parts) >= 1:
-                date_part = parts[0].split("-")[0]
-                time_part = parts[0].split("-")[1] if "-" in parts[0] else "000000"
-
-            if date_part != today_str:
-                continue
-
-            # Verifica se há vídeo associado
-            vid_name = filename.replace("alert_", "event_").replace(".jpg", ".mp4")
-            vid_url  = f"/alerts_files/{vid_name}" if os.path.exists(os.path.join("alerts", vid_name)) else None
-
-            alert_history.append({
-                "id":        len(alert_history) + 1,
-                "time":      f"{time_part[0:2]}:{time_part[2:4]}:{time_part[4:6]}",
-                "date":      f"{date_part[6:8]}/{date_part[4:6]}/{date_part[0:4]}",
-                "camera":    CAMERAS.get(cam_id, {}).get("name", "Câmera"),
-                "message":   "Rompimento de fel detectado na linha!",
-                "image_url": f"/alerts_files/{filename}",
-                "video_url": vid_url
-            })
-            loaded += 1
-        except Exception as e:
-            print(f"Erro ao carregar alerta {filename}: {e}")
-
-    print(f"Total de {loaded} alertas carregados hoje.")
-
-load_existing_alerts()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPARO DE ALERTA
 # ─────────────────────────────────────────────────────────────────────────────
-def trigger_alert(message, frame, cam_id, record_video=True):
-    # Verifica se os alertas estão habilitados para essa câmera
+def trigger_alert(message, frame, cam_id):
     cam_cfg = CAMERAS.get(cam_id, {})
-    if not cam_cfg.get("alerts_enabled", True):
-        print(f"[{cam_id}] Alerta IGNORADO (câmera pausada): {message}")
-        return
+    if not cam_cfg.get("alerts_enabled", True): return
 
-    current_time = time.time()
-    last_time    = CONFIG["last_alert_time"].get(cam_id, 0)
+    now = time.time()
+    if now - CONFIG["last_alert_time"].get(cam_id, 0) <= CONFIG["alert_cooldown"]: return
+    CONFIG["last_alert_time"][cam_id] = now
 
-    if current_time - last_time <= CONFIG["alert_cooldown"]:
-        return  # em cooldown, ignora
-
-    CONFIG["last_alert_time"][cam_id] = current_time
-
-    timestamp   = time.strftime("%Y%m%d-%H%M%S")
-    img_name    = f"alert_{cam_id}_{timestamp}.jpg"
-    img_path    = os.path.join("alerts", img_name)
-    cv2.imwrite(img_path, frame)
-
-    vid_url = None
-    if record_video:
-        vid_name = f"event_{cam_id}_{timestamp}.avi"
-        vid_path = os.path.join("alerts", vid_name)
-        vid_url  = f"/alerts_files/{vid_name}"
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    img_name = f"alert_{cam_id}_{timestamp}.jpg"
+    cv2.imwrite(os.path.join("alerts", img_name), frame)
 
     alert_data = {
-        "id":        len(alert_history) + 1,
-        "time":      time.strftime("%H:%M:%S"),
-        "date":      time.strftime("%d/%m/%Y"),
-        "camera":    CAMERAS.get(cam_id, {}).get("name", "Simulador de Teste"),
-        "message":   message,
-        "image_url": f"/alerts_files/{img_name}",
-        "video_url": vid_url
+        "id": len(alert_history) + 1,
+        "time": time.strftime("%H:%M:%S"),
+        "camera": cam_cfg.get("name", cam_id),
+        "message": message,
+        "image_url": f"/alerts_files/{img_name}"
     }
-
     alert_history.insert(0, alert_data)
-    if len(alert_history) > 50:
-        alert_history.pop()
+    if len(alert_history) > 100: alert_history.pop()
 
-    print(f"ALERTA [{cam_id}]: {message}")
-
-    # Gravação no Banco de Dados Oracle
+    # Gravação no Banco
     phone = cam_cfg.get("phone_number")
-    
-    # Se for o simulador, tenta pegar o telefone da regra sendo testada
     if cam_id == "test_feed":
-        from flask import request
-        # test_video_rule é global
-        sim_cfg = CAMERAS.get(test_video_rule, {})
-        phone = sim_cfg.get("phone_number")
-        print(f"[test_feed] Usando telefone da regra {test_video_rule}: {phone or 'N/A'}")
-
-    # Fallback para telefone padrão se estiver vazio
+        phone = CAMERAS.get(test_video_rule, {}).get("phone_number")
+    
+    # Fallback se vazio
     if not phone:
-        # Tenta pegar de qualquer câmera que tenha telefone ou usa um valor fixo se desejar
         for c in CAMERAS.values():
             if c.get("phone_number"):
                 phone = c["phone_number"]
                 break
-    
-    print(f"[{cam_id}] Tentando registrar alerta no banco (Fone: {phone or 'N/A'})...")
+
     insert_alert_to_db(phone, message, frame)
-
-    if record_video:
-        # Gravação automática de 15 s
-        def auto_record():
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            out    = cv2.VideoWriter(vid_path, fourcc, 15.0, (640, 360))
-            end_t  = time.time() + 15
-            while time.time() < end_t:
-                with lock:
-                    if cam_id in latest_frames and latest_frames[cam_id] is not None:
-                        resized = cv2.resize(latest_frames[cam_id], (640, 360))
-                        out.write(resized)
-                time.sleep(0.06)
-            out.release()
-            print(f"Auto-gravação concluída: {vid_name}")
-
-        threading.Thread(target=auto_record, daemon=True).start()
+    print(f"ALERTA [{cam_id}]: {message}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MOTOR DE AUDITORIA DE ANOMALIAS – Câmera 02
-# ─────────────────────────────────────────────────────────────────────────────
-def run_behavior_audit(frame, cam_id, state_data, zones):
-    """
-    Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
-    """
-    # No modo de teste, o cam_id é 'test_feed'. Precisamos do ID real da câmera para pegar o ROI.
-    target_cam = cam_id if cam_id in CAMERAS else test_video_rule or "camera_02"
-    
-    # 1. Busca operador na área principal (ROI da câmera)
-    main_roi = np.array(CAMERAS[target_cam]["roi"])
-    op_work  = detect_operator(frame, main_roi)
-    
-    # 2. Busca qualquer sinal de operador no quadro todo (para regra de abandono)
-    op_any = detect_operator(frame, None)
-    
-    hands = detect_hand(frame)
-    now   = time.time()
-
-    # ── Desenho das Zonas Ativas
-    zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255)}
-    for zname, pts in zones.items():
-        if zname not in zone_colors: continue
-        color = zone_colors[zname]
-        cv2.polylines(frame, [np.array(pts)], True, color, 2)
-        cv2.putText(frame, zname.upper(), (pts[0][0], pts[0][1]-5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
-
-    # ── REGRA 1: Início de Ciclo e Detecção de Pedra Biliar (Objeto Sólido)
-    cofre_pts = np.array(zones["cofre"])
-    green_det, fel_mask = detect_green_stain(frame, cofre_pts)
-    
-    if green_det:
-        if not state_data["process_active"]:
-            state_data["process_active"] = True
-            add_audit_log("CICLO INICIADO: Bile detectada no cofre.")
-        state_data["last_furo_time"] = now
-        cv2.putText(frame, "BILE NO COFRE", (820, 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    
-    # Detecção de Pedra: busca objeto sólido filtrando mãos e fel
-    bg = cofre_backgrounds.get(cam_id)
-    # Passamos hands e fel_mask para o detector ignorar esses objetos
-    has_stone, stone_mask, stone_dets = detect_stone(frame, cofre_pts, bg, hands=hands, fel_mask=fel_mask)
-    
-    if has_stone and state_data["process_active"]:
-        # Só marca pedra se for logo após o furo (janela de 10s)
-        if now - state_data["last_furo_time"] < 10:
-            if not state_data["stone_suspected"]:
-                state_data["stone_suspected"] = True
-                add_audit_log("ALERTA: PEDRA BILIAR DETECTADA!")
-                
-                # USER REQUEST: Tira apenas uma foto (sem vídeo) com a área identificada
-                if not state_data.get("stone_photo_taken", False):
-                    # Faz uma cópia para desenhar o marcador de calibração
-                    calib_frame = frame.copy()
-                    for det in stone_dets:
-                        x, y, w, h = det['rect']
-                        cv2.rectangle(calib_frame, (x, y), (x+w, y+h), (255, 0, 255), 3)
-                        cv2.putText(calib_frame, "AREA DA PEDRA", (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
-                    
-                    trigger_alert("CALIBRACAO: Pedra identificada no cofre", calib_frame, cam_id, record_video=False)
-                    state_data["stone_photo_taken"] = True
-
-            cv2.putText(frame, "PEDRA SUSPEITA!", (820, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-    # Atualiza o fundo do cofre quando estiver limpo por 3 segundos
-    if not green_det and (now - state_data["last_furo_time"] > 3):
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cofre_backgrounds[cam_id] = cv2.GaussianBlur(gray, (21, 21), 0)
-
-    # ── REGRA 2: Mão na Cintura/Bolso (Anomalia de Roubo)
-    # Detecta se a mão amarela está na altura da cintura E alinhada lateralmente
-    if op_work:
-        helmet_x, helmet_y = op_work['center']
-        for h in hands:
-            hx, hy = h['center']
-            # Se a mão estiver na zona de altura (150-450px abaixo) 
-            # E alinhada lateralmente (máx 150px de distância do centro)
-            if (helmet_y + 150) < hy < (helmet_y + 450) and abs(hx - helmet_x) < 150:
-                time_since = now - state_data["last_furo_time"]
-                if state_data["process_active"] or time_since < 15:
-                    msg = "ROUBO: Mão na região do bolso!"
-                    if state_data["stone_suspected"]: msg = "CRÍTICO: Furto de Pedra Suspeito!"
-                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                    add_audit_log(msg)
-
-    # ── REGRA 3: Manipulação Excessiva / Mão Profunda (Furto)
-    cofre_pts = np.array(zones["cofre"])
-    cofre_y_min = min(p[1] for p in zones["cofre"])
-    cofre_height = max(p[1] for p in zones["cofre"]) - cofre_y_min
-    
-    hand_in_cofre = False
-    for h in hands:
-        cx, cy = h['center']
-        if cv2.pointPolygonTest(cofre_pts, (float(cx), float(cy)), False) >= 0:
-            hand_in_cofre = True
-            if cy > (cofre_y_min + cofre_height * 0.6):
-                cv2.putText(frame, "MAO PROFUNDA!", (cx-40, cy-20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                if state_data["hand_in_cofre_since"] == 0:
-                    state_data["hand_in_cofre_since"] = now
-                elif now - state_data["hand_in_cofre_since"] > 2:
-                    msg = "SUSPEITA: Tentativa de pegar pedra no fundo do cofre!"
-                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                    add_audit_log(msg)
-                    state_data["hand_in_cofre_since"] = now
-            break
-
-    if not hand_in_cofre:
-        state_data["hand_in_cofre_since"] = 0
-
-    # ── REGRA 4: Operador se Abaixou (Suspeita de esconder pedra no sapato)
-    # Só valida se o operador principal (op_work) estiver na zona inferior extrema
-    if op_work:
-        time_since_furo = now - state_data["last_furo_time"]
-        # Limiar aumentado para 1000 (quase no limite inferior do quadro)
-        if op_work['center'][1] > 1000:
-            # Validação extra: mãos também devem estar baixas (perto dos pés)
-            hands_low = any(h['center'][1] > 950 for h in hands)
-            if time_since_furo < 7 and hands_low:
-                msg = "POSTURA CRÍTICA: Abaixou-se nos pés após o furo!"
-                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                add_audit_log(msg)
-        state_data["last_helmet_y"] = op_work['center'][1]
-
-    # ── REGRA 5: Abandono / Ausência Prolongada (> 10s)
-    # Aqui usamos o op_any: só conta ausência se NÃO houver ninguém em lugar nenhum do quadro
-    if not op_any:
-        if state_data["operator_absent_since"] == 0:
-            state_data["operator_absent_since"] = now
-    else:
-        state_data["operator_absent_since"] = 0
-
-    if state_data["process_active"]:
-        time_since_furo = now - state_data["last_furo_time"]
-        
-        # Verifica se está ausente há mais de 10 segundos
-        if state_data["operator_absent_since"] > 0:
-            absent_duration = now - state_data["operator_absent_since"]
-            if absent_duration > 10:
-                msg = f"FUGA: Operador ausente por {int(absent_duration)}s!"
-                if state_data["stone_suspected"]: msg = "CRÍTICO: Abandono de local com suspeita de Pedra!"
-                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-                add_audit_log(msg)
-                # Reseta para não disparar em loop
-                state_data["process_active"] = False 
-                state_data["stone_photo_taken"] = False
-                state_data["operator_absent_since"] = 0
-        
-        # Timeout do ciclo (se ninguém fugiu, encerra após 30s)
-        elif now - state_data["last_furo_time"] > 30:
-            state_data["process_active"]    = False
-            state_data["stone_suspected"]   = False
-            state_data["stone_photo_taken"] = False
-            add_audit_log("Ciclo de inspeção encerrado (Normal).")
-
-    # ── Status na tela
-    status_txt = "SUSPEITA DE PEDRA" if state_data["stone_suspected"] else "MONITORANDO"
-    color = (0, 0, 255) if state_data["stone_suspected"] else (255, 165, 0)
-    cv2.putText(frame, f"STATUS: {status_txt}", (710, 1050),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
-
-    if op_work:
-        cv2.circle(frame, op_work['center'], 20, (255, 255, 255), 2)
-    elif op_any:
-        # Se ele não está na work_area mas está na sala, desenha em cinza
-        cv2.circle(frame, op_any['center'], 15, (150, 150, 150), 1)
-
-    return frame
-
-# ─────────────────────────────────────────────────────────────────────────────
-# THREAD DE CAPTURA DE CÂMERA AO VIVO
+# THREADS E ROTAS (Resumido para o essencial da 157f0b3)
 # ─────────────────────────────────────────────────────────────────────────────
 def video_stream_thread(cam_id):
     cam_cfg = CAMERAS[cam_id]
-    cap     = cv2.VideoCapture(cam_cfg["rtsp_url"])
-    print(f"Iniciando thread para {cam_id}...")
-
+    cap = cv2.VideoCapture(cam_cfg["rtsp_url"])
     while True:
         ret, frame = cap.read()
         if not ret:
-            print(f"[{cam_id}] Falha ao capturar frame. Reconectando...")
             time.sleep(2)
             cap.open(cam_cfg["rtsp_url"])
             continue
-
+        
+        with lock: latest_frames[cam_id] = frame.copy()
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
-            # ── Detecção de Movimento da Esteira ──
             mask = np.zeros(frame.shape[:2], dtype=np.uint8)
             cv2.fillPoly(mask, [roi_points], 255)
             roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
-            
             is_moving = True
             if cam_id in last_roi_frames:
                 diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
                 movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                is_moving = movement > 1.5 # Limiar de movimento
+                is_moving = movement > 1.5
             last_roi_frames[cam_id] = roi_gray
 
             candidates, _ = detect_green_stain(frame, roi_points)
-            tracker  = blob_trackers.get(cam_id)
+            tracker = blob_trackers.get(cam_id)
             confirmed = tracker.update(candidates) if tracker else candidates
             
             for det in confirmed:
                 x, y, w, h = det['rect']
-                frames_txt = det.get('frames', '')
                 cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
             if confirmed and is_moving:
                 trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
-            elif confirmed and not is_moving:
-                cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
-            frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
-
-        # Desenha o ROI na tela
-        cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
-
-        # Gravação manual
-        with lock:
-            if recording_states.get(cam_id):
-                recording_states[cam_id].write(cv2.resize(frame, (640, 360)))
-            latest_frames[cam_id] = frame
-
-        time.sleep(0.05)  # ~20 FPS max, libera CPU
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ROTAS FLASK
-# ─────────────────────────────────────────────────────────────────────────────
-def trigger_alert_wrapper(message, frame, cam_id, record_video=True):
-    trigger_alert(message, frame, cam_id, record_video=record_video)
+            run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
 
 @app.route('/')
-def index():
-    return send_from_directory('.', 'index.html')
+def index(): return send_from_directory('.', 'index.html')
 
 @app.route('/alerts_files/<filename>')
-def get_alert_image(filename):
-    return send_from_directory('alerts', filename)
+def get_alert_image(filename): return send_from_directory('alerts', filename)
 
 @app.route('/alerts')
-def get_alerts():
-    return jsonify(alert_history)
+def get_alerts(): return jsonify(alert_history)
 
 @app.route('/audit_logs')
-def get_audit_logs():
-    return jsonify(audit_logs)
-
-@app.route('/toggle_alerts/<cam_id>', methods=['POST'])
-def toggle_alerts(cam_id):
-    if cam_id not in CAMERAS:
-        return jsonify({"status": "error", "message": "Câmera não encontrada"})
-    current = CAMERAS[cam_id].get("alerts_enabled", True)
-    CAMERAS[cam_id]["alerts_enabled"] = not current
-    state = "ATIVO" if CAMERAS[cam_id]["alerts_enabled"] else "PAUSADO"
-    print(f"[{cam_id}] Alertas: {state}")
-    return jsonify({"status": "success", "cam_id": cam_id, "alerts_enabled": CAMERAS[cam_id]["alerts_enabled"]})
+def get_audit_logs(): return jsonify(audit_logs)
 
 @app.route('/camera_status')
 def camera_status():
-    """Retorna o estado de alertas e configs de todas as câmeras"""
-    return jsonify({
-        cam_id: {
-            "alerts_enabled": cfg.get("alerts_enabled", True),
-            "phone_number": cfg.get("phone_number", ""),
-            "name": cfg.get("name", "")
-        } for cam_id, cfg in CAMERAS.items()
-    })
+    return jsonify({cid: {"alerts_enabled": cfg.get("alerts_enabled", True), "phone_number": cfg.get("phone_number", ""), "name": cfg.get("name", "")} 
+                    for cid, cfg in CAMERAS.items()})
 
-@app.route('/update_camera_settings/<cam_id>', methods=['POST'])
-def update_camera_settings(cam_id):
-    if cam_id not in CAMERAS:
-        return jsonify({"status": "error", "message": "Câmera não encontrada"})
+@app.route('/set_test_video', methods=['POST'])
+def set_test_video():
+    global test_video_rule
     data = request.json
-    if 'phone_number' in data:
-        CAMERAS[cam_id]['phone_number'] = data['phone_number']
-    persist_roi_config()
+    test_video_rule = data.get('rule', 'camera_01')
     return jsonify({"status": "success"})
-
-@app.route('/config', methods=['GET', 'POST'])
-def handle_config():
-    if request.method == 'POST':
-        CONFIG.update(request.json)
-        return jsonify({"status": "success", "config": CONFIG})
-    return jsonify(CONFIG)
-
-@app.route('/snapshot/<cam_id>')
-def snapshot(cam_id):
-    """Retorna um frame único da câmera como JPEG para o editor de ROI."""
-    with lock:
-        frame = latest_frames.get(cam_id)
-    if frame is None:
-        return "Câmera sem frame disponível", 503
-    flag, enc = cv2.imencode('.jpg', frame)
-    if not flag:
-        return "Erro ao codificar frame", 500
-    from flask import make_response
-    resp = make_response(enc.tobytes())
-    resp.headers['Content-Type'] = 'image/jpeg'
-    resp.headers['Cache-Control'] = 'no-store'
-    return resp
-
-@app.route('/save_roi/<cam_id>', methods=['POST'])
-def save_roi(cam_id):
-    """Salva ROI principal ou uma zona específica da câmera."""
-    if cam_id not in CAMERAS:
-        return jsonify({"status": "error", "message": "Câmera não encontrada"})
-    data   = request.json
-    points = data.get('points', [])
-    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'pockets', 'work_area'
-    if len(points) < 3:
-        return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
-    if zone and 'zones' in CAMERAS[cam_id]:
-        CAMERAS[cam_id]['zones'][zone] = points
-        persist_roi_config()
-        print(f"[{cam_id}] Zona '{zone}' atualizada e salva: {points}")
-        return jsonify({"status": "success", "zone": zone, "roi": points})
-    else:
-        CAMERAS[cam_id]['roi'] = points
-        persist_roi_config()
-        print(f"[{cam_id}] ROI principal salvo: {points}")
-        return jsonify({"status": "success", "roi": points})
-
-@app.route('/get_roi/<cam_id>')
-def get_roi(cam_id):
-    """Retorna ROI principal e todas as zonas da câmera."""
-    if cam_id not in CAMERAS:
-        return jsonify({"status": "error"})
-    cam = CAMERAS[cam_id]
-    return jsonify({
-        "roi":   cam.get('roi', []),
-        "zones": cam.get('zones', {})
-    })
-
-@app.route('/roi_editor')
-def roi_editor():
-    """Página do editor visual de ROI."""
-    return send_from_directory('.', 'roi_editor.html')
-
-
-@app.route('/set_test_speed', methods=['POST'])
-def set_test_speed():
-    global test_video_speed
-    test_video_speed = float(request.json.get('speed', 1.0))
-    return jsonify({"status": "success", "speed": test_video_speed})
-
-@app.route('/list_server_videos')
-def list_server_videos():
-    """Lista todos os vídeos .mp4 disponíveis no servidor (alerts/ e uploads/)."""
-    videos = []
-    search_dirs = [
-        ('alerts',  'alerts'),
-        ('uploads', 'uploads'),
-    ]
-    for folder, label in search_dirs:
-        if not os.path.exists(folder):
-            continue
-        for fname in os.listdir(folder):
-            if not fname.lower().endswith('.mp4'):
-                continue
-            fpath = os.path.join(folder, fname)
-            stat  = os.stat(fpath)
-            videos.append({
-                "filename": fname,
-                "folder":   label,
-                "path":     f"/{folder}/{fname}",   # URL relativa para servir
-                "size_mb":  round(stat.st_size / (1024 * 1024), 1),
-                "mtime":    stat.st_mtime,
-            })
-    # Ordena do mais recente para o mais antigo
-    videos.sort(key=lambda v: v["mtime"], reverse=True)
-    return jsonify(videos)
-
-@app.route('/use_server_video', methods=['POST'])
-def use_server_video():
-    """Aponta o motor de teste para um vídeo já existente no servidor."""
-    global test_video_rule
-    data     = request.json or {}
-    folder   = data.get('folder', 'alerts')
-    filename = data.get('filename', '')
-    rule     = data.get('rule', 'camera_01')
-
-    if not filename:
-        return jsonify({"status": "error", "message": "filename obrigatório"})
-
-    src_path = os.path.join(folder, filename)
-    if not os.path.exists(src_path):
-        return jsonify({"status": "error", "message": f"Arquivo não encontrado: {src_path}"})
-
-    # Copia para o slot de teste — mas evita copiar arquivo sobre si mesmo
-    os.makedirs('uploads', exist_ok=True)
-    import shutil
-    dest_path = os.path.join('uploads', 'test_video.mp4')
-    src_abs   = os.path.realpath(src_path)
-    dest_abs  = os.path.realpath(dest_path)
-    if src_abs != dest_abs:
-        shutil.copy2(src_path, dest_path)
-        print(f"[TESTE] Vídeo copiado: {src_path} → {dest_path}")
-    else:
-        print(f"[TESTE] Vídeo já no slot de teste: {src_path}")
-    test_video_rule = rule
-    print(f"[TESTE] Regra ativa: {rule}")
-    return jsonify({"status": "success"})
-
-@app.route('/upload_video', methods=['POST'])
-def upload_video():
-    global test_video_rule
-    if 'video' not in request.files:
-        return jsonify({"status": "error", "message": "No video file"})
-    file = request.files['video']
-    rule = request.form.get('rule', 'camera_01')
-    if file.filename == '':
-        return jsonify({"status": "error", "message": "No file selected"})
-    os.makedirs('uploads', exist_ok=True)
-    file.save(os.path.join('uploads', 'test_video.mp4'))
-    test_video_rule = rule
-    return jsonify({"status": "success"})
-
-@app.route('/start_record/<cam_id>')
-def start_record(cam_id):
-    with lock:
-        if recording_states.get(cam_id):
-            return jsonify({"status": "error", "message": "Already recording"})
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename  = f"record_{cam_id}_{timestamp}.mp4"
-        filepath  = os.path.join("alerts", filename)
-        fourcc    = cv2.VideoWriter_fourcc(*'mp4v')
-        recording_states[cam_id] = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
-    return jsonify({"status": "success", "filename": filename})
-
-@app.route('/stop_record/<cam_id>')
-def stop_record(cam_id):
-    with lock:
-        if recording_states.get(cam_id):
-            recording_states[cam_id].release()
-            recording_states[cam_id] = None
-            return jsonify({"status": "success"})
-    return jsonify({"status": "error", "message": "Not recording"})
 
 @app.route('/video_feed/<cam_id>')
 def video_feed(cam_id):
-
-    # ── Modo de Teste (vídeo enviado pelo usuário) ────────────────────────────
-    def generate_test():
-        filepath = os.path.join('uploads', 'test_video.mp4')
-        if not os.path.exists(filepath):
-            return
-
-        cap     = cv2.VideoCapture(filepath)
-        cam_cfg = CAMERAS.get(test_video_rule, CAMERAS["camera_02"])
-
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-        time_debt = 0.0
-
-        while cap.isOpened():
-            target_delay = 1.0 / (fps * test_video_speed)
-            start_time   = time.time()
-
-            # Pula frames se estiver atrasado
-            if time_debt > target_delay:
-                skip = min(int(time_debt / target_delay), int(fps))
-                for _ in range(skip):
-                    cap.grab()
-                time_debt -= skip * target_delay
-
-            ret, frame = cap.read()
-            if not ret:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                time_debt = 0.0
-                continue
-
-            roi_points = np.array(cam_cfg["roi"], np.int32)
-            state_key  = "test_audit"
-
-            if cam_cfg["type"] == "color_detection":
-                # ── Detecção de Movimento (Teste) ──
-                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-                cv2.fillPoly(mask, [roi_points], 255)
-                roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
-                is_moving = True
-                if "test_feed" in last_roi_frames:
-                    diff = cv2.absdiff(last_roi_frames["test_feed"], roi_gray)
-                    movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                    is_moving = movement > 1.5
-                last_roi_frames["test_feed"] = roi_gray
-
-                candidates, _ = detect_green_stain(frame, roi_points)
-                tracker   = blob_trackers.get("test_feed")
-                confirmed = tracker.update(candidates) if tracker else candidates
-                for det in confirmed:
-                    x, y, w, h = det['rect']
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                    cv2.putText(frame, f"FEL ({det.get('frames','')}f)", (x, y - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                
-                if confirmed and is_moving:
-                    cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)",
-                                (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                    trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
-                elif confirmed and not is_moving:
-                    cv2.putText(frame, "ESTEIRA PARADA (TESTE)", (50, 80),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-            elif cam_cfg["type"] == "behavior_detection":
-                frame = run_behavior_audit(frame, "test_feed",
-                                           audit_state[state_key], cam_cfg["zones"])
-
-            # ROI e label de modo teste
-            cv2.polylines(frame, [roi_points], True, (255, 165, 0), 2)
-            cv2.putText(frame, "MODO TESTE", (50, 90),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 165, 0), 2)
-
-            # Gravação de teste
-            with lock:
-                if recording_states.get("test_feed"):
-                    recording_states["test_feed"].write(cv2.resize(frame, (640, 360)))
-
-            flag, enc = cv2.imencode(".jpg", frame)
-            if flag:
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                       + enc.tobytes() + b'\r\n\r\n')
-
-            elapsed    = time.time() - start_time
-            time_debt += elapsed - target_delay
-            if time_debt < 0:
-                time.sleep(-time_debt)
-                time_debt = 0.0
-
-        cap.release()
-
-    # ── Câmera ao Vivo ────────────────────────────────────────────────────────
     def generate_live():
-        # Frame de placeholder enviado enquanto a câmera conecta
-        placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(placeholder, "Conectando camera...", (120, 220),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (100, 100, 100), 2)
-        cv2.putText(placeholder, cam_id.replace("_", " ").upper(), (180, 270),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (60, 60, 60), 1)
-        _, ph_enc = cv2.imencode(".jpg", placeholder)
-        ph_bytes  = ph_enc.tobytes()
-
         while True:
-            with lock:
-                frame = latest_frames.get(cam_id)
-
+            with lock: frame = latest_frames.get(cam_id)
             if frame is None:
-                # Envia o placeholder para o browser não girar
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                       + ph_bytes + b'\r\n\r\n')
-                time.sleep(0.5)
-                continue
+                time.sleep(0.5); continue
+            _, enc = cv2.imencode(".jpg", frame)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + enc.tobytes() + b'\r\n\r\n')
+            time.sleep(0.04)
 
-            flag, enc = cv2.imencode(".jpg", frame)
-            if flag:
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
-                       + enc.tobytes() + b'\r\n\r\n')
-            time.sleep(0.04)   # ~25 FPS para o navegador
+    def generate_test():
+        global test_video_rule
+        filepath = os.path.join('uploads', 'test_video.mp4')
+        if not os.path.exists(filepath): return
+        cap = cv2.VideoCapture(filepath)
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret: cap.set(cv2.CAP_PROP_POS_FRAMES, 0); continue
+            
+            cam_cfg = CAMERAS.get(test_video_rule, CAMERAS["camera_01"])
+            roi_points = np.array(cam_cfg["roi"], np.int32)
+            
+            # Detecção no teste (simplificada mas fiel à 157f0b3)
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(mask, [roi_points], 255)
+            roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
+            is_moving = True
+            if "test_feed" in last_roi_frames:
+                diff = cv2.absdiff(last_roi_frames["test_feed"], roi_gray)
+                movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
+                is_moving = movement > 1.5
+            last_roi_frames["test_feed"] = roi_gray
+
+            candidates, _ = detect_green_stain(frame, roi_points)
+            tracker = blob_trackers.get("test_feed")
+            confirmed = tracker.update(candidates) if tracker else candidates
+            
+            if confirmed and is_moving:
+                trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")
+            
+            for det in confirmed:
+                x, y, w, h = det['rect']
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+
+            _, enc = cv2.imencode(".jpg", frame)
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + enc.tobytes() + b'\r\n\r\n')
+            time.sleep(0.05)
+        cap.release()
 
     if cam_id == "test_feed":
         return Response(generate_test(), mimetype='multipart/x-mixed-replace; boundary=frame')
     return Response(generate_live(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# INICIALIZAÇÃO
-# ─────────────────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     os.makedirs('alerts', exist_ok=True)
-
     for cam_id in CAMERAS:
-        t = threading.Thread(target=video_stream_thread, args=(cam_id,), daemon=True)
-        t.start()
-
+        threading.Thread(target=video_stream_thread, args=(cam_id,), daemon=True).start()
     app.run(host='0.0.0.0', port=5050, debug=False, threaded=True)
