@@ -1,4 +1,4 @@
-﻿import cv2
+import cv2
 import numpy as np
 
 # Estados para Auditoria da Câmera 02
