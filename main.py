@@ -85,13 +85,15 @@ load_roi_config()
 # ─────────────────────────────────────────────────────────────────────────────
 audit_state = {
     "camera_02": {
-        "process_active": False,   # True quando verde detectado no cofre
-        "last_furo_time": 0,       # Timestamp do último furo detectado
+        "process_active": False,   # True quando bile detectada no cofre
+        "stone_suspected": False,  # True se detectamos algo sólido com a bile
+        "last_furo_time": 0,       # Timestamp do último furo
         "hand_in_cofre_since": 0,  # Timestamp início mão dentro do cofre
         "last_helmet_y": 0,        # Última posição Y do capacete
     },
     "test_audit": {
         "process_active": False,
+        "stone_suspected": False,
         "last_furo_time": 0,
         "hand_in_cofre_since": 0,
         "last_helmet_y": 0,
@@ -256,19 +258,13 @@ def trigger_alert(message, frame, cam_id):
 # ─────────────────────────────────────────────────────────────────────────────
 def run_behavior_audit(frame, cam_id, state_data, zones):
     """
-    Executa as 4 heurísticas de segurança e desenha as marcações no frame.
-    Retorna o frame anotado.
+    Motor de Auditoria Anti-Furto e Detecção de Pedras (Câmera 02)
     """
     operator = detect_operator(frame, np.array(zones["work_area"]))
     hands    = detect_hand(frame)
+    now      = time.time()
 
-    # ── Desenho: Operador
-    if operator:
-        cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
-        cv2.putText(frame, "OPERADOR", (operator['center'][0]-30, operator['center'][1]-28),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-    # ── Desenho: Zonas
+    # ── Desenho das Zonas
     zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255),
                    "pockets": (0, 165, 255), "work_area": (50, 50, 50)}
     for zname, pts in zones.items():
@@ -278,73 +274,94 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
             cv2.putText(frame, zname.upper(), (pts[0][0], pts[0][1]-5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-    # ── Heurística 0: Gatilho de processo (verde no cofre)
+    # ── REGRA 1: Início de Ciclo e Suspeita de Pedra Biliar
     green_det, _ = detect_green_stain(frame, np.array(zones["cofre"]))
     if green_det:
         if not state_data["process_active"]:
             state_data["process_active"] = True
-            add_audit_log("PROCESSO INICIADO: Rompimento detectado no cofre.")
-        state_data["last_furo_time"] = time.time()
-        cv2.putText(frame, "FURO DETECTADO", (820, 50),
+            add_audit_log("CICLO INICIADO: Bile detectada no cofre.")
+        
+        state_data["last_furo_time"] = now
+        
+        # Tentativa simples de identificar pedra: blob muito grande ou múltiplos blobs
+        if len(green_det) > 1 or any(d['area'] > 5000 for d in green_det):
+            if not state_data["stone_suspected"]:
+                state_data["stone_suspected"] = True
+                add_audit_log("ALERTA: Possível PEDRA BILIAR identificada!")
+        
+        cv2.putText(frame, "BILE NO COFRE", (820, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    # ── Heurística 1: Mão no bolso / cintura
+    # ── REGRA 2: Mão na Cintura/Bolso (Anomalia de Roubo)
     pocket_pts = np.array(zones["pockets"])
-    hand_in_pocket = any(
-        cv2.pointPolygonTest(pocket_pts, (float(h['center'][0]), float(h['center'][1])), False) >= 0
-        for h in hands
-    )
-    if hand_in_pocket:
-        msg = "ANOMALIA: Mão na cintura/bolso detectada!"
-        trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-        add_audit_log(msg)
+    for h in hands:
+        cx, cy = h['center']
+        if cv2.pointPolygonTest(pocket_pts, (float(cx), float(cy)), False) >= 0:
+            time_since = now - state_data["last_furo_time"]
+            if state_data["process_active"] or time_since < 15:
+                msg = "ROUBO: Mão no bolso com processo ativo!"
+                if state_data["stone_suspected"]: msg = "CRÍTICO: Furto de Pedra Biliar Suspeito!"
+                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                add_audit_log(msg)
 
-    # ── Heurística 2: Mão dentro do cofre por mais de 4 s
+    # ── REGRA 3: Manipulação Excessiva / Mão Profunda (Furto)
     cofre_pts = np.array(zones["cofre"])
-    hand_in_cofre = any(
-        cv2.pointPolygonTest(cofre_pts, (float(h['center'][0]), float(h['center'][1])), False) >= 0
-        for h in hands
-    )
-    if hand_in_cofre:
-        if state_data["hand_in_cofre_since"] == 0:
-            state_data["hand_in_cofre_since"] = time.time()
-        elif time.time() - state_data["hand_in_cofre_since"] > 4:
-            msg = "ANOMALIA: Manipulação excessiva dentro do cofre!"
-            trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-            add_audit_log(msg)
-            state_data["hand_in_cofre_since"] = time.time()
-    else:
+    cofre_y_min = min(p[1] for p in zones["cofre"])
+    cofre_height = max(p[1] for p in zones["cofre"]) - cofre_y_min
+    
+    hand_in_cofre = False
+    for h in hands:
+        cx, cy = h['center']
+        if cv2.pointPolygonTest(cofre_pts, (float(cx), float(cy)), False) >= 0:
+            hand_in_cofre = True
+            if cy > (cofre_y_min + cofre_height * 0.6):
+                cv2.putText(frame, "MAO PROFUNDA!", (cx-40, cy-20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                if state_data["hand_in_cofre_since"] == 0:
+                    state_data["hand_in_cofre_since"] = now
+                elif now - state_data["hand_in_cofre_since"] > 2:
+                    msg = "SUSPEITA: Tentativa de pegar pedra no fundo do cofre!"
+                    trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                    add_audit_log(msg)
+                    state_data["hand_in_cofre_since"] = now
+            break
+
+    if not hand_in_cofre:
         state_data["hand_in_cofre_since"] = 0
 
-    # ── Heurística 3: Operador se abaixou (capacete muito baixo na imagem)
-    if operator and operator['center'][1] > 950:
-        msg = "ANOMALIA: Operador se abaixou!"
-        trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
-        add_audit_log(msg)
+    # ── REGRA 4: Operador se Abaixou (Condicional 5s)
+    if operator:
+        time_since_furo = now - state_data["last_furo_time"]
+        if operator['center'][1] > 950:
+            if time_since_furo < 5:
+                msg = "POSTURA SUSPEITA: Abaixou imediatamente após furo!"
+                trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
+                add_audit_log(msg)
+        state_data["last_helmet_y"] = operator['center'][1]
 
-    # ── Heurística 4: Abandono imediato pós-furo
-    # APENAS dispara se o processo foi ativado E o operador ESTAVA presente
-    # e SAIU nos primeiros 3 s. Sem operador detectado previamente = sem alerta.
+    # ── REGRA 5: Abandono Imediato (Fuga com Pedra)
     if state_data["process_active"]:
-        time_since = time.time() - state_data["last_furo_time"]
+        time_since = now - state_data["last_furo_time"]
         if time_since < 3 and state_data["last_helmet_y"] > 0:
-            # Operador estava presente (last_helmet_y preenchido) e agora sumiu
             if not operator:
-                msg = "ANOMALIA: Abandono imediato pós-furo!"
+                msg = "FUGA: Operador saiu da vista logo após furo!"
+                if state_data["stone_suspected"]: msg = "CRÍTICO: Fuga com possível Pedra Biliar!"
                 trigger_alert(f"AUDITORIA: {msg}", frame, cam_id)
                 add_audit_log(msg)
                 state_data["process_active"] = False
-        elif time_since > 8:
-            state_data["process_active"] = False
-            add_audit_log("Ciclo concluído (permanência OK).")
-
-    # Atualiza posição do capacete para próximo ciclo
-    state_data["last_helmet_y"] = operator['center'][1] if operator else 0
+        elif time_since > 10:
+            state_data["process_active"]  = False
+            state_data["stone_suspected"] = False
+            add_audit_log("Ciclo de inspeção encerrado.")
 
     # ── Status na tela
-    status_txt = "PROCESSO ATIVO" if state_data["process_active"] else "MONITORANDO..."
-    cv2.putText(frame, f"AUDITORIA: {status_txt}", (710, 1050),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
+    status_txt = "SUSPEITA DE PEDRA" if state_data["stone_suspected"] else "MONITORANDO"
+    color = (0, 0, 255) if state_data["stone_suspected"] else (255, 165, 0)
+    cv2.putText(frame, f"STATUS: {status_txt}", (710, 1050),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+    if operator:
+        cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
 
     return frame
 
