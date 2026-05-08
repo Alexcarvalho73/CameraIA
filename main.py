@@ -4,10 +4,10 @@ import json
 import time
 import threading
 import numpy as np
-from flask import Flask, Response, jsonify, request, send_from_directory
-from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CONFIGURAÇÃO AMBIENTAL ORACLE (DEVE SER A PRIMEIRA COISA)
+# ─────────────────────────────────────────────────────────────────────────────
 try:
     import oracledb
     ORACLE_AVAILABLE = True
@@ -15,21 +15,25 @@ try:
         instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
         oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
         
-        # Garante que as variáveis de ambiente estejam no processo atual
+        # Força as variáveis no ambiente do SO antes de qualquer conexão
         os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
         os.environ['TNS_ADMIN'] = oracle_wallet_path
         
         if os.path.exists(instant_client_path):
             oracledb.init_oracle_client(lib_dir=instant_client_path)
-            print(f"[DB] Oracle Thick Mode ativado usando: {instant_client_path}")
+            print(f"[DB] Oracle Thick Mode inicializado: {instant_client_path}")
         else:
             oracledb.init_oracle_client()
-            print("[DB] Oracle Thick Mode ativado.")
+            print("[DB] Oracle Thick Mode inicializado.")
     except Exception as e:
         print(f"[DB] Erro ao ativar modo Thick: {e}")
 except ImportError:
     ORACLE_AVAILABLE = False
-    print("[AVISO] oracledb não encontrado. Integração com banco de dados desativada.")
+    print("[AVISO] oracledb não encontrado.")
+
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_cors import CORS
+from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
 
 app = Flask(__name__)
 CORS(app)
