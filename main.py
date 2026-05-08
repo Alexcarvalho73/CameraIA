@@ -186,10 +186,10 @@ def insert_alert_to_db(phone, message, frame):
             )
             cursor = conn.cursor()
             sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
+            print(f"[DB] Executando INSERT para {phone}...")
             cursor.execute(sql, [str(phone), str(message), 0, 'G', img_bytes])
             conn.commit()
-            cursor.close()
-            print(f"[DB] Alerta e imagem gravados para {phone}")
+            print(f"[DB] Alerta gravado com sucesso no Oracle.")
         except Exception as e:
             print(f"[DB] Erro Oracle: {e}")
         finally:
