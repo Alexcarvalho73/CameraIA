@@ -715,8 +715,12 @@ def start_record(cam_id):
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename  = f"record_{cam_id}_{timestamp}.mp4"
         filepath  = os.path.join("alerts", filename)
-        fourcc    = cv2.VideoWriter_fourcc(*'mp4v')
-        recording_states[cam_id] = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
+        fourcc    = cv2.VideoWriter_fourcc(*'XVID')
+        vw = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
+        if not vw.isOpened():
+            print(f"[ERRO] Falha ao inicializar VideoWriter para {filepath}")
+            return jsonify({"status": "error", "message": "Could not initialize video writer"})
+        recording_states[cam_id] = vw
     return jsonify({"status": "success", "filename": filename})
 
 @app.route('/stop_record/<cam_id>')
