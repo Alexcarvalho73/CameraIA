@@ -224,33 +224,42 @@ def detect_green_stain(frame, roi_polygon):
     """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # 1. Zona de Exclusão por Operadores (Lógica "Humana")
-    # Identifica onde as pessoas estão para ignorar braços/mãos
+    # 1. Detecta Operadores e Luvas
     operators = detect_operators(frame)
-    exclusion_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-    for op in operators:
-        # Cria um círculo de exclusão ao redor do operador (onde os braços alcançam)
-        # Raio de ~450px cobre o alcance do braço na perspectiva da câmera
-        cv2.circle(exclusion_mask, op['center'], 450, 255, -1)
-
-    # 2. Máscara de Luvas (Amarelo)
+    
     lower_glove = np.array([15, 60, 60])
     upper_glove = np.array([38, 255, 255])
-    glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
-    glove_mask = cv2.dilate(glove_mask, np.ones((15, 15), np.uint8))
+    glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
+    
+    # 2. Lógica de Vínculo: Só anula o amarelo se estiver perto de uma pessoa
+    # Isso evita que o fel real (que pode ser amarelado) seja anulado por engano
+    confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    if operators:
+        for op in operators:
+            # Cria uma máscara de proximidade para este operador (raio de 400px)
+            proximity_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.circle(proximity_mask, op['center'], 400, 255, -1)
+            
+            # Apenas as luvas DENTRO desta área de proximidade são confirmadas como "mão"
+            op_glove = cv2.bitwise_and(glove_candidates_mask, proximity_mask)
+            confirmed_glove_mask = cv2.bitwise_or(confirmed_glove_mask, op_glove)
+    
+    # Dilata um pouco a máscara da luva confirmada para garantir cobertura
+    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((11, 11), np.uint8))
 
     # 3. Detecta Fel (Verde/Amarelo Saturado)
-    mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
-    cv2.fillPoly(mask_roi, [roi_polygon], 255)
-    
-    lower_fel = np.array([30, 80, 50])
+    # S=60 permite captar fel mais diluído; V=40 permite captar em sombras
+    lower_fel = np.array([30, 60, 40])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
     
-    # FILTRAGEM TRIPLA: ROI + COR DA LUVA + PROXIMIDADE DA PESSOA
+    # Prepara ROI
+    mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask_roi, [roi_polygon], 255)
+    
+    # FILTRAGEM: ROI - LUVAS CONFIRMADAS (PERTO DE PESSOAS)
     fel_mask = cv2.bitwise_and(fel_mask, mask_roi)
-    fel_mask = cv2.subtract(fel_mask, glove_mask)
-    fel_mask = cv2.subtract(fel_mask, exclusion_mask)
+    fel_mask = cv2.subtract(fel_mask, confirmed_glove_mask)
 
     # Limpeza morfológica
     kernel   = np.ones((7, 7), np.uint8)
@@ -262,7 +271,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 1000: continue
+        if area < 800: continue # Sensibilidade aumentada (área menor permitida)
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
 
