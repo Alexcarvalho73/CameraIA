@@ -11,25 +11,11 @@ import numpy as np
 try:
     import oracledb
     ORACLE_AVAILABLE = True
-    try:
-        instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
-        oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
-        
-        # Força as variáveis no ambiente do SO antes de qualquer conexão
-        os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-        os.environ['TNS_ADMIN'] = oracle_wallet_path
-        
-        if os.path.exists(instant_client_path):
-            oracledb.init_oracle_client(lib_dir=instant_client_path)
-            print(f"[DB] Oracle Thick Mode inicializado: {instant_client_path}")
-        else:
-            oracledb.init_oracle_client()
-            print("[DB] Oracle Thick Mode inicializado.")
-    except Exception as e:
-        print(f"[DB] Erro ao ativar modo Thick: {e}")
+    # No Modo Thin (oracledb 2.0+), não precisamos de init_oracle_client nem Instant Client
+    print("[DB] Oracle Thin Mode ativado.")
 except ImportError:
     ORACLE_AVAILABLE = False
-    print("[AVISO] oracledb não encontrado.")
+    print("[AVISO] Biblioteca oracledb não encontrada.")
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -232,7 +218,7 @@ load_existing_alerts()
 def insert_alert_to_db(phone, message, frame):
     """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
     if not ORACLE_AVAILABLE:
-        print("[DB] CANCELADO: Driver Oracle não inicializado (Thick Mode falhou).")
+        print("[DB] CANCELADO: Biblioteca oracledb não disponível.")
         return
     if not phone:
         print("[DB] CANCELADO: Telefone de destino não encontrado para esta câmera.")
