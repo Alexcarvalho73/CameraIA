@@ -161,8 +161,8 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
-    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
+    "camera_01": BlobTracker(min_frames=15, max_jump_px=50),
+    "test_feed":  BlobTracker(min_frames=15, max_jump_px=50),
 }
 
 

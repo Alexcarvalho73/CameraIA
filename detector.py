@@ -221,28 +221,30 @@ def _detect_glove_regions(hsv_full_frame):
 def detect_green_stain(frame, roi_polygon):
     """
     Detecta candidatos de mancha de fel dentro da ROI.
-
-    Discriminação luva vs. fel é feita EXCLUSIVAMENTE pelo BlobTracker
-    em main.py (persistência temporal):
-      - Luva: movimento errático, blob desaparece/salta frame a frame
-      - Fel:  estático (ou desliza com a esteira), persiste vários frames
-
-    Não há check espacial de luva aqui — bile cai exatamente onde o
-    operador trabalha, então luvas sempre estariam próximas do fel real.
+    Implementa rejeição espacial de luvas para evitar falsos positivos
+    causados pelas mãos do operador.
     """
+    hsv_full = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    glove_regions = _detect_glove_regions(hsv_full)
+
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
     roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
     hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
 
     # Cor do fel: amarelo-esverdeado (H=30) até verde puro (H=90)
-    # Hue >= 30 exclui a gordura bege (que é mais alaranjada/H<30)
-    # S>=20 permite captar bile mesmo que diluída
     lower_fel = np.array([30, 20, 100])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
 
-    # Limpeza morfológica — remove ruído sem destruir manchas reais
+    # REJEIÇÃO DE LUVAS: Remove áreas que coincidem com luvas amarelas
+    for (gx, gy, gw, gh) in glove_regions:
+        margin = 15
+        y1, y2 = max(0, gy - margin), min(frame.shape[0], gy + gh + margin)
+        x1, x2 = max(0, gx - margin), min(frame.shape[1], gx + gw + margin)
+        fel_mask[y1:y2, x1:x2] = 0
+
+    # Limpeza morfológica
     kernel   = np.ones((7, 7), np.uint8)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_OPEN,  kernel)
     fel_mask = cv2.morphologyEx(fel_mask, cv2.MORPH_CLOSE, kernel)
@@ -252,7 +254,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 1000:   # remove ruído pontual
+        if area < 1000:
             continue
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
