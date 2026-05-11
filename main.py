@@ -240,6 +240,12 @@ def insert_alert_to_db(phone, message, frame):
     def run_insert():
         conn = None
         try:
+            # Reforça variáveis de ambiente dentro da thread
+            instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
+            oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
+            os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+            os.environ['TNS_ADMIN'] = oracle_wallet_path
+
             # Redimensiona para economia de espaço no banco (640x360)
             resized = cv2.resize(frame, (640, 360))
             _, img_encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
