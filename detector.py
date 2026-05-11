@@ -221,28 +221,31 @@ def _detect_glove_regions(hsv_full_frame):
 def detect_green_stain(frame, roi_polygon):
     """
     Detecta candidatos de mancha de fel dentro da ROI.
-    Implementa rejeição espacial de luvas para evitar falsos positivos
-    causados pelas mãos do operador.
+    Implementa rejeição espacial de luvas usando máscara exata.
     """
-    hsv_full = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    glove_regions = _detect_glove_regions(hsv_full)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # 1. Detecta máscara de luvas (amarelo vibrante) no frame todo
+    lower_glove = np.array([15, 60, 60])
+    upper_glove = np.array([38, 255, 255])
+    glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
+    kernel_glove = np.ones((11, 11), np.uint8)
+    glove_mask = cv2.dilate(glove_mask, kernel_glove, iterations=1) # Margem de segurança
 
+    # 2. Prepara ROI
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
-    roi_frame = cv2.bitwise_and(frame, frame, mask=mask_roi)
-    hsv_roi   = cv2.cvtColor(roi_frame, cv2.COLOR_BGR2HSV)
-
-    # Cor do fel: amarelo-esverdeado (H=30) até verde puro (H=90)
-    lower_fel = np.array([30, 20, 100])
+    
+    # 3. Detecta Fel (Verde/Amarelo Saturado)
+    # S=80 exclui gordura (quase branca/desaturada)
+    # V=50 permite captar em sombras
+    lower_fel = np.array([30, 80, 50])
     upper_fel = np.array([90, 255, 255])
-    fel_mask  = cv2.inRange(hsv_roi, lower_fel, upper_fel)
-
-    # REJEIÇÃO DE LUVAS: Remove áreas que coincidem com luvas amarelas
-    for (gx, gy, gw, gh) in glove_regions:
-        margin = 15
-        y1, y2 = max(0, gy - margin), min(frame.shape[0], gy + gh + margin)
-        x1, x2 = max(0, gx - margin), min(frame.shape[1], gx + gw + margin)
-        fel_mask[y1:y2, x1:x2] = 0
+    fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
+    
+    # Aplica ROI e REMOVE LUVAS usando a máscara exata
+    fel_mask = cv2.bitwise_and(fel_mask, mask_roi)
+    fel_mask = cv2.subtract(fel_mask, glove_mask)
 
     # Limpeza morfológica
     kernel   = np.ones((7, 7), np.uint8)
