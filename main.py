@@ -11,11 +11,19 @@ import numpy as np
 try:
     import oracledb
     ORACLE_AVAILABLE = True
-    # No Modo Thin (oracledb 2.0+), não precisamos de init_oracle_client nem Instant Client
-    print("[DB] Oracle Thin Mode ativado.")
-except ImportError:
+    instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
+    oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
+    
+    # Variáveis de ambiente para o driver Thick
+    os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+    os.environ['TNS_ADMIN'] = oracle_wallet_path
+    
+    # Inicializa o modo Thick (necessário para auto-login cwallet.sso)
+    oracledb.init_oracle_client(lib_dir=instant_client_path)
+    print(f"[DB] Oracle Thick Mode restaurado com sucesso.")
+except Exception as e:
     ORACLE_AVAILABLE = False
-    print("[AVISO] Biblioteca oracledb não encontrada.")
+    print(f"[AVISO] Falha ao iniciar Oracle Thick: {e}")
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
@@ -241,8 +249,7 @@ def insert_alert_to_db(phone, message, frame):
             dsn_direto = '(description=(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))'
             
             conn = oracledb.connect(
-                user="mensagem", password="crbsAcs@2026", dsn=dsn_direto,
-                config_dir=ORACLE_WALLET_PATH, wallet_location=ORACLE_WALLET_PATH
+                user="mensagem", password="crbsAcs@2026", dsn=dsn_direto
             )
             cursor = conn.cursor()
             sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
