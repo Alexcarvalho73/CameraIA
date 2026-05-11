@@ -231,9 +231,14 @@ load_existing_alerts()
 # ─────────────────────────────────────────────────────────────────────────────
 def insert_alert_to_db(phone, message, frame):
     """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
-    if not ORACLE_AVAILABLE: return
-    if not phone or frame is None:
-        print(f"[DB] CANCELADO: Telefone não configurado para este alerta.")
+    if not ORACLE_AVAILABLE:
+        print("[DB] CANCELADO: Driver Oracle não inicializado (Thick Mode falhou).")
+        return
+    if not phone:
+        print("[DB] CANCELADO: Telefone de destino não encontrado para esta câmera.")
+        return
+    if frame is None:
+        print("[DB] CANCELADO: Frame inválido.")
         return
     
     ORACLE_WALLET_PATH = "/home/rdt/CameraIA/DriveOracle"
