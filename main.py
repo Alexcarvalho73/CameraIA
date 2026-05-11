@@ -544,8 +544,14 @@ def toggle_alerts(cam_id):
 
 @app.route('/camera_status')
 def camera_status():
-    """Retorna o estado de alerts_enabled de todas as câmeras"""
-    return jsonify({cam_id: cfg.get("alerts_enabled", True) for cam_id, cfg in CAMERAS.items()})
+    """Retorna o estado completo das câmeras para o dashboard"""
+    return jsonify({
+        cam_id: {
+            "name": cfg.get("name", cam_id),
+            "alerts_enabled": cfg.get("alerts_enabled", True),
+            "phone_number": cfg.get("phone_number", "")
+        } for cam_id, cfg in CAMERAS.items()
+    })
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
