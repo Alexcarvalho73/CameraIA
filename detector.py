@@ -227,29 +227,27 @@ def detect_green_stain(frame, roi_polygon):
     # 1. Detecta Operadores e Luvas
     operators = detect_operators(frame)
     
-    lower_glove = np.array([15, 60, 60])
-    upper_glove = np.array([38, 255, 255])
+    # Luvas: Amarelo muito específico e vibrante
+    lower_glove = np.array([18, 100, 100])
+    upper_glove = np.array([32, 255, 255])
     glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
-    # 2. Lógica de Vínculo: Só anula o amarelo se estiver perto de uma pessoa
-    # Isso evita que o fel real (que pode ser amarelado) seja anulado por engano
+    # 2. Lógica de Vínculo: Só anula o amarelo se estiver muito perto de uma pessoa
     confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     if operators:
         for op in operators:
-            # Cria uma máscara de proximidade para este operador (raio de 400px)
+            # Raio de 280px é suficiente para os braços sem invadir o centro da esteira
             proximity_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            cv2.circle(proximity_mask, op['center'], 400, 255, -1)
+            cv2.circle(proximity_mask, op['center'], 280, 255, -1)
             
-            # Apenas as luvas DENTRO desta área de proximidade são confirmadas como "mão"
             op_glove = cv2.bitwise_and(glove_candidates_mask, proximity_mask)
             confirmed_glove_mask = cv2.bitwise_or(confirmed_glove_mask, op_glove)
     
-    # Dilata um pouco a máscara da luva confirmada para garantir cobertura
-    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((11, 11), np.uint8))
+    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((9, 9), np.uint8))
 
-    # 3. Detecta Fel (Verde/Amarelo Saturado)
-    # S=60 permite captar fel mais diluído; V=40 permite captar em sombras
-    lower_fel = np.array([30, 60, 40])
+    # 3. Detecta Fel (Verde/Amarelo)
+    # S=50 aumenta a sensibilidade para fel diluído
+    lower_fel = np.array([30, 50, 40])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
     
