@@ -109,8 +109,8 @@ class BlobTracker:
 # ─────────────────────────────────────────────────────────────────────────────
 # DETECÇÃO DE OPERADOR (capacete branco)
 # ─────────────────────────────────────────────────────────────────────────────
-def detect_operator(frame, roi_points=None):
-    """Detecta o capacete branco do operador de forma rigorosa."""
+def detect_operators(frame, roi_points=None):
+    """Detecta todos os capacetes brancos presentes na cena."""
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     lower_white = np.array([0, 0, 210])
     upper_white = np.array([180, 30, 255])
@@ -125,20 +125,20 @@ def detect_operator(frame, roi_points=None):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    operators = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area > 1200 and area < 7000:
+        if 1000 < area < 8000:
             x, y, w, h = cv2.boundingRect(cnt)
             center = (x + w // 2, y + h // 2)
-            if center[1] > 900:
+            if center[1] > 1000: # Ignora reflexos muito baixos se houver
                 continue
             perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
-                continue
+            if perimeter == 0: continue
             circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > 0.6:
-                return {'center': center, 'rect': (x, y, w, h)}
-    return None
+            if circularity > 0.55:
+                operators.append({'center': center, 'rect': (x, y, w, h)})
+    return operators
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,32 +220,37 @@ def _detect_glove_regions(hsv_full_frame):
 # ─────────────────────────────────────────────────────────────────────────────
 def detect_green_stain(frame, roi_polygon):
     """
-    Detecta candidatos de mancha de fel dentro da ROI.
-    Implementa rejeição espacial de luvas usando máscara exata.
+    Detecta candidatos de mancha de fel dentro da ROI com filtragem por proximidade humana.
     """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # 1. Detecta máscara de luvas (amarelo vibrante) no frame todo
+    # 1. Zona de Exclusão por Operadores (Lógica "Humana")
+    # Identifica onde as pessoas estão para ignorar braços/mãos
+    operators = detect_operators(frame)
+    exclusion_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    for op in operators:
+        # Cria um círculo de exclusão ao redor do operador (onde os braços alcançam)
+        # Raio de ~450px cobre o alcance do braço na perspectiva da câmera
+        cv2.circle(exclusion_mask, op['center'], 450, 255, -1)
+
+    # 2. Máscara de Luvas (Amarelo)
     lower_glove = np.array([15, 60, 60])
     upper_glove = np.array([38, 255, 255])
     glove_mask = cv2.inRange(hsv, lower_glove, upper_glove)
-    kernel_glove = np.ones((11, 11), np.uint8)
-    glove_mask = cv2.dilate(glove_mask, kernel_glove, iterations=1) # Margem de segurança
+    glove_mask = cv2.dilate(glove_mask, np.ones((15, 15), np.uint8))
 
-    # 2. Prepara ROI
+    # 3. Detecta Fel (Verde/Amarelo Saturado)
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
     
-    # 3. Detecta Fel (Verde/Amarelo Saturado)
-    # S=80 exclui gordura (quase branca/desaturada)
-    # V=50 permite captar em sombras
     lower_fel = np.array([30, 80, 50])
     upper_fel = np.array([90, 255, 255])
     fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
     
-    # Aplica ROI e REMOVE LUVAS usando a máscara exata
+    # FILTRAGEM TRIPLA: ROI + COR DA LUVA + PROXIMIDADE DA PESSOA
     fel_mask = cv2.bitwise_and(fel_mask, mask_roi)
     fel_mask = cv2.subtract(fel_mask, glove_mask)
+    fel_mask = cv2.subtract(fel_mask, exclusion_mask)
 
     # Limpeza morfológica
     kernel   = np.ones((7, 7), np.uint8)
@@ -257,8 +262,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 1000:
-            continue
+        if area < 1000: continue
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
 

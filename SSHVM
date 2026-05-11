@@ -6,6 +6,6 @@ SSH frigorifico
 
 cd /home/rdt/CameraIA && ./atualizar.sh
 
-git add . ; git commit -m "Foto da identificação da pedra" ; git push origin main ; ssh frigorifico "cd /home/rdt/CameraIA && ./atualizar.sh"
+git add . ; git commit -m "Solucao Vinculo Pessoa-Luva" ; git push origin main ; ssh frigorifico "cd /home/rdt/CameraIA && git checkout -- . && ./atualizar.sh"
 
 scp frigorifico:/home/rdt/CameraIA/alerts/*.jpg .

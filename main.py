@@ -33,7 +33,7 @@ except ImportError:
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
+from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker
 
 app = Flask(__name__)
 CORS(app)
@@ -354,13 +354,14 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     Executa as 4 heurísticas de segurança e desenha as marcações no frame.
     Retorna o frame anotado.
     """
-    operator = detect_operator(frame, np.array(zones["work_area"]))
-    hands    = detect_hand(frame)
+    operators = detect_operators(frame, np.array(zones["work_area"]))
+    hands     = detect_hand(frame)
+    operator  = operators[0] if operators else None
 
-    # ── Desenho: Operador
-    if operator:
-        cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
-        cv2.putText(frame, "OPERADOR", (operator['center'][0]-30, operator['center'][1]-28),
+    # ── Desenho: Operadores
+    for op in operators:
+        cv2.circle(frame, op['center'], 20, (255, 255, 255), 2)
+        cv2.putText(frame, "OPERADOR", (op['center'][0]-30, op['center'][1]-28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
     # ── Desenho: Zonas
