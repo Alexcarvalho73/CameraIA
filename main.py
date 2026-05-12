@@ -370,7 +370,7 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
 
     # ── Desenho: Zonas
     zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255),
-                   "pockets": (0, 165, 255), "work_area": (50, 50, 50)}
+                   "work_area": (50, 50, 50), "esteira_producao": (0, 165, 255)}
     for zname, pts in zones.items():
         color = zone_colors.get(zname, (255, 255, 0))
         cv2.polylines(frame, [np.array(pts)], True, color, 2)
@@ -608,7 +608,7 @@ def save_roi(cam_id):
         return jsonify({"status": "error", "message": "Câmera não encontrada"})
     data   = request.json
     points = data.get('points', [])
-    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'pockets', 'work_area'
+    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'work_area', 'esteira_producao'
     if len(points) < 3:
         return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
     if zone and 'zones' in CAMERAS[cam_id]:
