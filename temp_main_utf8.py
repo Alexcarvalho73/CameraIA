@@ -1,33 +1,12 @@
-import os
+﻿import os
 import cv2
 import json
 import time
 import threading
 import numpy as np
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO AMBIENTAL ORACLE (DEVE SER A PRIMEIRA COISA)
-# ─────────────────────────────────────────────────────────────────────────────
-try:
-    import oracledb
-    ORACLE_AVAILABLE = True
-    instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
-    oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
-    
-    # Variáveis de ambiente para o driver Thick
-    os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-    os.environ['TNS_ADMIN'] = oracle_wallet_path
-    
-    # Inicializa o modo Thick (necessário para auto-login cwallet.sso)
-    oracledb.init_oracle_client(lib_dir=instant_client_path)
-    print(f"[DB] Oracle Thick Mode restaurado com sucesso.")
-except Exception as e:
-    ORACLE_AVAILABLE = False
-    print(f"[AVISO] Falha ao iniciar Oracle Thick: {e}")
-
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker, detect_production_active
+from detector import detect_green_stain, detect_hand, detect_operator, BlobTracker
 
 app = Flask(__name__)
 CORS(app)
@@ -41,8 +20,7 @@ CAMERAS = {
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[280, 375], [790, 320], [810, 710], [195, 750]],
         "type": "color_detection",
-        "alerts_enabled": True,     # Câmera 01 com alertas ATIVOS
-        "phone_number": "5511000000000" # Configure aqui o número real
+        "alerts_enabled": True     # Câmera 01 com alertas ATIVOS
     },
     "camera_02": {
         "name": "Cofre - Fluxo de Vesícula",
@@ -51,12 +29,11 @@ CAMERAS = {
         "zones": {
             "cofre":     [[800, 20],  [1150, 20],  [1150, 300], [800, 300]],
             "descarte":  [[850, 320], [1150, 320], [1150, 600], [850, 600]],
-            "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]],
-            "esteira_producao": [[1550, 20], [1910, 20], [1910, 1050], [1400, 1050]]
+            "pockets":   [[850, 650], [1150, 650], [1150, 900], [850, 900]],
+            "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]]
         },
         "type": "behavior_detection",
-        "alerts_enabled": False,    # Câmera 02 com alertas PAUSADOS
-        "phone_number": "5511000000000"
+        "alerts_enabled": False    # Câmera 02 com alertas PAUSADOS
     }
 }
 
@@ -77,8 +54,6 @@ def load_roi_config():
                 continue
             if 'roi' in cfg:
                 CAMERAS[cam_id]['roi'] = cfg['roi']
-            if 'phone_number' in cfg:
-                CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
                 for zone_name, pts in cfg['zones'].items():
                     CAMERAS[cam_id]['zones'][zone_name] = pts
@@ -94,8 +69,6 @@ def persist_roi_config():
             data[cam_id] = {}
             if 'roi' in cfg:
                 data[cam_id]['roi'] = cfg['roi']
-            if 'phone_number' in cfg:
-                data[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg:
                 data[cam_id]['zones'] = cfg['zones']
         with open(ROI_CONFIG_FILE, 'w') as f:
@@ -155,16 +128,13 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=6, max_jump_px=120),
-    "test_feed":  BlobTracker(min_frames=6, max_jump_px=120),
+    "camera_01": BlobTracker(min_frames=10, max_jump_px=110),
+    "test_feed":  BlobTracker(min_frames=10, max_jump_px=110),
 }
 
 
 # Cache para detecção de movimento da esteira
 last_roi_frames = {} 
-
-# Estado global de produção (compartilhado). Câmera 01 é a fonte de verdade.
-global_production_active = True
 
 
 
@@ -224,56 +194,6 @@ def load_existing_alerts():
 load_existing_alerts()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BANCO DE DADOS ORACLE
-# ─────────────────────────────────────────────────────────────────────────────
-def insert_alert_to_db(phone, message, frame):
-    """Insere o alerta e a imagem redimensionada na tabela DIZIMO.MENSAGENS."""
-    if not ORACLE_AVAILABLE:
-        print("[DB] CANCELADO: Biblioteca oracledb não disponível.")
-        return
-    if not phone:
-        print("[DB] CANCELADO: Telefone de destino não encontrado para esta câmera.")
-        return
-    if frame is None:
-        print("[DB] CANCELADO: Frame inválido.")
-        return
-    
-    ORACLE_WALLET_PATH = "/home/rdt/CameraIA/DriveOracle"
-
-    def run_insert():
-        conn = None
-        try:
-            # Reforça variáveis de ambiente dentro da thread
-            instant_client_path = "/home/rdt/CameraIA/instantclient_21_1"
-            oracle_wallet_path = "/home/rdt/CameraIA/DriveOracle"
-            os.environ['LD_LIBRARY_PATH'] = f"{instant_client_path}:{os.environ.get('LD_LIBRARY_PATH', '')}"
-            os.environ['TNS_ADMIN'] = oracle_wallet_path
-
-            # Redimensiona para economia de espaço no banco (640x360)
-            resized = cv2.resize(frame, (640, 360))
-            _, img_encoded = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
-            img_bytes = img_encoded.tobytes()
-            
-            # String de conexão direta (DSN completo) que funcionou no teste
-            dsn_direto = '(description=(address=(protocol=tcps)(port=1522)(host=adb.sa-vinhedo-1.oraclecloud.com))(connect_data=(service_name=g674a77dea23c6a_imaculado_high.adb.oraclecloud.com))(security=(ssl_server_dn_match=yes)))'
-            
-            conn = oracledb.connect(
-                user="mensagem", password="crbsAcs@2026", dsn=dsn_direto
-            )
-            cursor = conn.cursor()
-            sql = "INSERT INTO DIZIMO.MENSAGENS (TELEFONE, TEXTO, STATUS, TIPO, IMAGEM) VALUES (:1, :2, :3, :4, :5)"
-            print(f"[DB] Executando INSERT para {phone}...")
-            cursor.execute(sql, [str(phone), str(message), 0, 'G', img_bytes])
-            conn.commit()
-            print(f"[DB] Alerta gravado com sucesso no Oracle.")
-        except Exception as e:
-            print(f"[DB] Erro Oracle: {e}")
-        finally:
-            if conn: conn.close()
-            
-    threading.Thread(target=run_insert, daemon=True).start()
-
-# ─────────────────────────────────────────────────────────────────────────────
 # DISPARO DE ALERTA
 # ─────────────────────────────────────────────────────────────────────────────
 def trigger_alert(message, frame, cam_id):
@@ -315,28 +235,6 @@ def trigger_alert(message, frame, cam_id):
 
     print(f"ALERTA [{cam_id}]: {message}")
 
-    # Gravação no Banco de Dados Oracle
-    phone = cam_cfg.get("phone_number")
-    
-    # Se for o simulador, tenta pegar o telefone da regra sendo testada
-    if cam_id == "test_feed":
-        sim_cfg = CAMERAS.get(test_video_rule, {})
-        phone = sim_cfg.get("phone_number")
-        if phone:
-            print(f"[test_feed] Usando telefone da regra {test_video_rule}: {phone}")
-
-    # Fallback se vazio
-    if not phone:
-        for c in CAMERAS.values():
-            if c.get("phone_number"):
-                phone = c["phone_number"]
-                break
-    
-    if phone:
-        insert_alert_to_db(phone, message, frame)
-    else:
-        print(f"[{cam_id}] Nenhuma regra de telefone encontrada para registrar no banco.")
-
     # Gravação automática de 20 s
     def auto_record():
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -361,19 +259,18 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
     Executa as 4 heurísticas de segurança e desenha as marcações no frame.
     Retorna o frame anotado.
     """
-    operators = detect_operators(frame, np.array(zones["work_area"]))
-    hands     = detect_hand(frame)
-    operator  = operators[0] if operators else None
+    operator = detect_operator(frame, np.array(zones["work_area"]))
+    hands    = detect_hand(frame)
 
-    # ── Desenho: Operadores
-    for op in operators:
-        cv2.circle(frame, op['center'], 20, (255, 255, 255), 2)
-        cv2.putText(frame, "OPERADOR", (op['center'][0]-30, op['center'][1]-28),
+    # ── Desenho: Operador
+    if operator:
+        cv2.circle(frame, operator['center'], 20, (255, 255, 255), 2)
+        cv2.putText(frame, "OPERADOR", (operator['center'][0]-30, operator['center'][1]-28),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
     # ── Desenho: Zonas
     zone_colors = {"cofre": (0, 255, 0), "descarte": (0, 255, 255),
-                   "work_area": (50, 50, 50), "esteira_producao": (0, 165, 255)}
+                   "pockets": (0, 165, 255), "work_area": (50, 50, 50)}
     for zname, pts in zones.items():
         color = zone_colors.get(zname, (255, 255, 0))
         cv2.polylines(frame, [np.array(pts)], True, color, 2)
@@ -391,10 +288,10 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
         cv2.putText(frame, "FURO DETECTADO", (820, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    # ── Heurística 1: Mão fora da bancada (bolso / cintura)
-    work_pts = np.array(zones["work_area"])
+    # ── Heurística 1: Mão no bolso / cintura
+    pocket_pts = np.array(zones["pockets"])
     hand_in_pocket = any(
-        cv2.pointPolygonTest(work_pts, (float(h['center'][0]), float(h['center'][1])), False) < 0
+        cv2.pointPolygonTest(pocket_pts, (float(h['center'][0]), float(h['center'][1])), False) >= 0
         for h in hands
     )
     if hand_in_pocket:
@@ -470,66 +367,37 @@ def video_stream_thread(cam_id):
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
-            # ── Detecção de Produção (Esteira Cheia ou Vazia) ──
-            # Câmera 01 (color_detection) é a fonte de verdade para o estado da esteira
-            is_production_active = detect_production_active(frame, roi_points)
+            # ── Detecção de Movimento da Esteira ──
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(mask, [roi_points], 255)
+            roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
             
-            global global_production_active
-            global_production_active = is_production_active
-            
-            text_x = frame.shape[1] - 420  # Lado superior direito
-            
-            if not is_production_active:
-                cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-            else:
-                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                
-                # ── Detecção de Movimento da Esteira ──
-                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-                cv2.fillPoly(mask, [roi_points], 255)
-                roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
-                
-                is_moving = True
-                if cam_id in last_roi_frames:
-                    diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
-                    movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                    is_moving = movement > 1.5 # Limiar de movimento
-                last_roi_frames[cam_id] = roi_gray
+            is_moving = True
+            if cam_id in last_roi_frames:
+                diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
+                movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
+                is_moving = movement > 1.5 # Limiar de movimento
+            last_roi_frames[cam_id] = roi_gray
 
-                # Processamento Pesado só ocorre com produção ativa
-                candidates, _ = detect_green_stain(frame, roi_points)
-                tracker  = blob_trackers.get(cam_id)
-                confirmed = tracker.update(candidates) if tracker else candidates
-                
-                for det in confirmed:
-                    x, y, w, h = det['rect']
-                    frames_txt = det.get('frames', '')
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                    cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-                
-                if confirmed and is_moving:
-                    trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
-                elif confirmed and not is_moving:
-                    cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 85),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            candidates, _ = detect_green_stain(frame, roi_points)
+            tracker  = blob_trackers.get(cam_id)
+            confirmed = tracker.update(candidates) if tracker else candidates
+            
+            for det in confirmed:
+                x, y, w, h = det['rect']
+                frames_txt = det.get('frames', '')
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            
+            if confirmed and is_moving:
+                trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
+            elif confirmed and not is_moving:
+                cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
-            # Para a Camera 02, usamos o estado detectado pela Câmera 01 (visibilidade melhor)
-            is_production_active = global_production_active
-            
-            text_x = frame.shape[1] - 420  # Lado superior direito
-
-            if not is_production_active:
-                cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-            else:
-                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                # Só audita se tiver produção (economiza muita CPU no YOLO Pose)
-                frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
+            frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
 
         # Desenha o ROI na tela
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
@@ -576,14 +444,8 @@ def toggle_alerts(cam_id):
 
 @app.route('/camera_status')
 def camera_status():
-    """Retorna o estado completo das câmeras para o dashboard"""
-    return jsonify({
-        cam_id: {
-            "name": cfg.get("name", cam_id),
-            "alerts_enabled": cfg.get("alerts_enabled", True),
-            "phone_number": cfg.get("phone_number", "")
-        } for cam_id, cfg in CAMERAS.items()
-    })
+    """Retorna o estado de alerts_enabled de todas as câmeras"""
+    return jsonify({cam_id: cfg.get("alerts_enabled", True) for cam_id, cfg in CAMERAS.items()})
 
 @app.route('/config', methods=['GET', 'POST'])
 def handle_config():
@@ -615,7 +477,7 @@ def save_roi(cam_id):
         return jsonify({"status": "error", "message": "Câmera não encontrada"})
     data   = request.json
     points = data.get('points', [])
-    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'work_area', 'esteira_producao'
+    zone   = data.get('zone', None)  # ex: 'cofre', 'descarte', 'pockets', 'work_area'
     if len(points) < 3:
         return jsonify({"status": "error", "message": "Mínimo de 3 pontos necessários"})
     if zone and 'zones' in CAMERAS[cam_id]:
@@ -628,21 +490,6 @@ def save_roi(cam_id):
         persist_roi_config()
         print(f"[{cam_id}] ROI principal salvo: {points}")
         return jsonify({"status": "success", "roi": points})
-
-@app.route('/update_camera_settings/<cam_id>', methods=['POST'])
-def update_camera_settings(cam_id):
-    """Atualiza configurações específicas da câmera (ex: telefone)."""
-    if cam_id not in CAMERAS:
-        return jsonify({"status": "error", "message": "Câmera não encontrada"}), 404
-    
-    data = request.json
-    if 'phone_number' in data:
-        CAMERAS[cam_id]['phone_number'] = data['phone_number']
-        persist_roi_config()
-        print(f"[{cam_id}] Telefone atualizado para: {data['phone_number']}")
-        return jsonify({"status": "success", "phone_number": data['phone_number']})
-    
-    return jsonify({"status": "error", "message": "Dados inválidos"}), 400
 
 @app.route('/get_roi/<cam_id>')
 def get_roi(cam_id):
@@ -747,12 +594,8 @@ def start_record(cam_id):
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename  = f"record_{cam_id}_{timestamp}.mp4"
         filepath  = os.path.join("alerts", filename)
-        fourcc    = cv2.VideoWriter_fourcc(*'XVID')
-        vw = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
-        if not vw.isOpened():
-            print(f"[ERRO] Falha ao inicializar VideoWriter para {filepath}")
-            return jsonify({"status": "error", "message": "Could not initialize video writer"})
-        recording_states[cam_id] = vw
+        fourcc    = cv2.VideoWriter_fourcc(*'mp4v')
+        recording_states[cam_id] = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
     return jsonify({"status": "success", "filename": filename})
 
 @app.route('/stop_record/<cam_id>')
