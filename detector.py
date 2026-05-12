@@ -152,12 +152,17 @@ def detect_operators(frame, roi_points=None):
                 if c_conf[0] > 0.4:
                     center = (int(kp[0][0]), int(kp[0][1]))
                     
-                # Pulso Esquerdo (9)
-                if c_conf[9] > 0.35:
+                # Pulso Esquerdo (9) - threshold baixo para pegar mãos sujas/camufladas
+                if c_conf[9] > 0.15:
                     wrists.append((int(kp[9][0]), int(kp[9][1])))
+                elif c_conf[7] > 0.15: # Fallback: Cotovelo Esquerdo
+                    wrists.append((int(kp[7][0]), int(kp[7][1])))
+                    
                 # Pulso Direito (10)
-                if c_conf[10] > 0.35:
+                if c_conf[10] > 0.15:
                     wrists.append((int(kp[10][0]), int(kp[10][1])))
+                elif c_conf[8] > 0.15: # Fallback: Cotovelo Direito
+                    wrists.append((int(kp[8][0]), int(kp[8][1])))
             
             op_data = {'center': center, 'rect': (x1, y1, w, h), 'wrists': wrists}
             
@@ -262,24 +267,44 @@ def detect_green_stain(frame, roi_polygon):
     upper_glove = np.array([32, 255, 255])
     glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
-    # 2. Lógica de Vínculo: Só anula o amarelo ao redor dos pulsos (esqueleto)
-    confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-    if operators:
-        for op in operators:
-            proximity_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            
-            # Se detectou os pulsos do esqueleto, cria máscara de exclusão cirúrgica de 90px
-            if 'wrists' in op and op['wrists']:
-                for wrist in op['wrists']:
-                    cv2.circle(proximity_mask, wrist, 90, 255, -1)
-            else:
-                # Fallback: Se não viu as mãos, faz um círculo menor no centro do corpo/cabeça
-                cv2.circle(proximity_mask, op['center'], 140, 255, -1)
-            
-            op_glove = cv2.bitwise_and(glove_candidates_mask, proximity_mask)
-            confirmed_glove_mask = cv2.bitwise_or(confirmed_glove_mask, op_glove)
+    # 2. Lógica de Vínculo: Usar Componentes Conectados para isolar SÓ a luva
+    glove_candidates_mask = cv2.morphologyEx(glove_candidates_mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    contours_yellow, _ = cv2.findContours(glove_candidates_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((9, 9), np.uint8))
+    confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    
+    if operators:
+        for cnt in contours_yellow:
+            if cv2.contourArea(cnt) < 150:
+                continue
+                
+            is_glove = False
+            for op in operators:
+                if 'wrists' in op and op['wrists']:
+                    for w in op['wrists']:
+                        dist = cv2.pointPolygonTest(cnt, (float(w[0]), float(w[1])), True)
+                        # Se o pulso está a até 120 pixels da bolha amarela, é a luva!
+                        if dist >= -120:
+                            is_glove = True
+                            break
+                else:
+                    # Fallback: Se não achou pulso, vê se o centro da bolha amarela está na caixa da pessoa
+                    M = cv2.moments(cnt)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        x, y, w, h = op['rect']
+                        if x < cx < x + w and y < cy < y + h:
+                            is_glove = True
+                            break
+                if is_glove:
+                    break
+                    
+            if is_glove:
+                # Desenha APENAS essa bolha exata na máscara de anulação
+                cv2.drawContours(confirmed_glove_mask, [cnt], -1, 255, -1)
+                
+    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((11, 11), np.uint8))
 
     # 3. Detecta Fel (Verde/Amarelo)
     # S=50 aumenta a sensibilidade para fel diluído
