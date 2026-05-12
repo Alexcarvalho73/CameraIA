@@ -311,6 +311,32 @@ def detect_green_stain(frame, roi_polygon):
 
     return detections, fel_mask
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DETECÇÃO DE PRODUÇÃO ATIVA
+# ─────────────────────────────────────────────────────────────────────────────
+def detect_production_active(frame, roi_points):
+    """
+    Verifica se a esteira está cheia de miúdos ou vazia.
+    Bandejas vazias são metálicas e cinzas (baixa saturação).
+    Miúdos têm cores (vermelho, gordura, sangue, fel) com maior saturação e brilho.
+    """
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.fillPoly(mask, [roi_points], 255)
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Filtra tudo que não seja cinza/preto/branco puro (Saturação > 35, Value > 40)
+    lower_color = np.array([0, 35, 40])
+    upper_color = np.array([180, 255, 255])
+
+    color_mask = cv2.inRange(hsv, lower_color, upper_color)
+    color_mask = cv2.bitwise_and(color_mask, mask)
+
+    # Conta o número de pixels "coloridos" na ROI
+    colored_area = np.sum(color_mask > 0)
+    
+    # Limiar: Se tiver mais de 10.000 pixels coloridos, consideramos produção ativa
+    return colored_area > 10000
+
 
 if __name__ == "__main__":
     print("Iniciando motor de detecção...")

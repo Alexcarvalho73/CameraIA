@@ -27,7 +27,7 @@ except Exception as e:
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker
+from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker, detect_production_active
 
 app = Flask(__name__)
 CORS(app)
@@ -467,37 +467,57 @@ def video_stream_thread(cam_id):
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
-            # ── Detecção de Movimento da Esteira ──
-            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            cv2.fillPoly(mask, [roi_points], 255)
-            roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
+            # ── Detecção de Produção (Esteira Cheia ou Vazia) ──
+            is_production_active = detect_production_active(frame, roi_points)
             
-            is_moving = True
-            if cam_id in last_roi_frames:
-                diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
-                movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                is_moving = movement > 1.5 # Limiar de movimento
-            last_roi_frames[cam_id] = roi_gray
+            if not is_production_active:
+                cv2.putText(frame, "SEM PRODUCAO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
+            else:
+                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                
+                # ── Detecção de Movimento da Esteira ──
+                mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(mask, [roi_points], 255)
+                roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
+                
+                is_moving = True
+                if cam_id in last_roi_frames:
+                    diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
+                    movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
+                    is_moving = movement > 1.5 # Limiar de movimento
+                last_roi_frames[cam_id] = roi_gray
 
-            candidates, _ = detect_green_stain(frame, roi_points)
-            tracker  = blob_trackers.get(cam_id)
-            confirmed = tracker.update(candidates) if tracker else candidates
-            
-            for det in confirmed:
-                x, y, w, h = det['rect']
-                frames_txt = det.get('frames', '')
-                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
-                cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            
-            if confirmed and is_moving:
-                trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
-            elif confirmed and not is_moving:
-                cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                # Processamento Pesado só ocorre com produção ativa
+                candidates, _ = detect_green_stain(frame, roi_points)
+                tracker  = blob_trackers.get(cam_id)
+                confirmed = tracker.update(candidates) if tracker else candidates
+                
+                for det in confirmed:
+                    x, y, w, h = det['rect']
+                    frames_txt = det.get('frames', '')
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                    cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                
+                if confirmed and is_moving:
+                    trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
+                elif confirmed and not is_moving:
+                    cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 85),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
-            frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
+            # Para a Camera 02, usamos a "work_area" para saber se há produção na bancada
+            is_production_active = detect_production_active(frame, np.array(cam_cfg["zones"]["work_area"]))
+            if not is_production_active:
+                cv2.putText(frame, "SEM PRODUCAO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
+            else:
+                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (50, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                # Só audita se tiver produção (economiza muita CPU no YOLO Pose)
+                frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
 
         # Desenha o ROI na tela
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
