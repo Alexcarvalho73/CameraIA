@@ -363,18 +363,23 @@
             <div class="header-stats">
                 <div class="stat-card">
                     <p style="opacity: 0.6; font-size: 14px;">Total de Ocorrências</p>
-                    <div class="stat-value" id="total-alerts">12</div>
-                    <p style="color: var(--danger); font-size: 12px;">↑ 12% desde ontem</p>
+                    <div class="stat-value" id="total-alerts-header">0</div>
+                    <p style="color: var(--danger); font-size: 12px;" id="alerts-trend">Monitoramento Ativo</p>
                 </div>
                 <div class="stat-card">
                     <p style="opacity: 0.6; font-size: 14px;">Eficiência da Linha</p>
-                    <div class="stat-value">98.4%</div>
-                    <p style="color: var(--success); font-size: 12px;">Estável</p>
+                    <div style="font-size: 20px; font-weight: 700; color: var(--primary); margin: 5px 0;">
+                        Turno: <span id="turno-atual">01</span>
+                    </div>
+                    <p style="font-size: 11px; opacity: 0.8; line-height: 1.4;">
+                        Início: <span id="job-start">---</span><br>
+                        Fim: <span id="job-end">---</span>
+                    </p>
                 </div>
                 <div class="stat-card">
                     <p style="opacity: 0.6; font-size: 14px;">Uptime Sistema</p>
-                    <div class="stat-value">24h 12m</div>
-                    <p style="opacity: 0.4; font-size: 12px;">Sem interrupções</p>
+                    <div class="stat-value" id="uptime-value">0h 0m</div>
+                    <p style="opacity: 0.4; font-size: 12px;" id="uptime-status">Conectado</p>
                 </div>
             </div>
 
@@ -574,12 +579,21 @@
             return true;
         }
 
-        function clearFilteredAlerts() {
-            // Marca os IDs visíveis como ocultos
-            const visible = allAlerts.filter(a => !hiddenAlertIds.has(a.id) && filterMatches(a)).slice(0, MAX_ALERTS);
-            visible.forEach(a => hiddenAlertIds.add(a.id));
-            lastAlertCount = -1;
-            renderAlerts();
+        async function clearFilteredAlerts() {
+            if (!confirm("Deseja limpar todos os alertas do servidor e da tela?")) return;
+            
+            try {
+                const res = await fetch('/clear_alerts', { method: 'POST' });
+                if (res.ok) {
+                    allAlerts = [];
+                    hiddenAlertIds.clear();
+                    lastAlertCount = -1;
+                    fetchAlerts._lastSig = '';
+                    renderAlerts([]);
+                }
+            } catch (e) {
+                console.error("Erro ao limpar alertas:", e);
+            }
         }
 
         function switchView(view) {
@@ -909,7 +923,7 @@
                     .slice(0, MAX_ALERTS);
 
                 const totalBadge = document.getElementById('total-alerts');
-                totalBadge.innerText = visible.length;
+                if (totalBadge) totalBadge.innerText = visible.length;
 
                 const sig = visible.map(a => a.id).join(',');
                 if (sig === (fetchAlerts._lastSig || '')) return;
@@ -918,6 +932,21 @@
                 renderAlerts(visible);
             } catch (e) {
                 console.error("Error fetching alerts:", e);
+            }
+        }
+
+        async function updateStats() {
+            try {
+                const res = await fetch('/get_stats');
+                const data = await res.json();
+                
+                document.getElementById('uptime-value').innerText = data.uptime;
+                document.getElementById('turno-atual').innerText = String(data.turno).padStart(2, '0');
+                document.getElementById('job-start').innerText = data.inicio;
+                document.getElementById('job-end').innerText = data.fim;
+                document.getElementById('total-alerts-header').innerText = data.total_alerts;
+            } catch (e) {
+                console.error("Error fetching stats:", e);
             }
         }
 
@@ -970,11 +999,14 @@
         setInterval(fetchAlerts, 2000);
         setInterval(fetchAuditLogs, 1000);
         setInterval(syncAlertStatus, 5000);
+        setInterval(updateStats, 5000);
+
         fetchAlerts();
         fetchAuditLogs();
-        syncAlertStatus(); // Sincroniza estado dos botões ao carregar
+        syncAlertStatus();
+        updateStats();
 
-        console.log("Dashboard IA carregado com monitoramento de alertas.");
+        console.log("Dashboard IA carregado com monitoramento de alertas e estatísticas.");
     </script>
 </body>
 </html>

@@ -166,6 +166,59 @@ last_roi_frames = {}
 # Estado global de produção (compartilhado). Câmera 01 é a fonte de verdade.
 global_production_active = True
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ESTATÍSTICAS E UPTIME
+# ─────────────────────────────────────────────────────────────────────────────
+SERVER_START_TIME = time.time()
+
+# Rastreamento de Turnos e Produção Diária
+shift_data = {
+    "date": time.strftime("%Y-%m-%d"),
+    "turno_atual": 1,
+    "trabalhos": [], # Lista de {"inicio": "HH:MM", "fim": "HH:MM"}
+    "production_in_progress": False
+}
+
+def update_shift_stats(is_active):
+    global shift_data
+    now_date = time.strftime("%Y-%m-%d")
+    now_time = time.strftime("%H:%M:%S")
+
+    # Virada de dia: reseta tudo
+    if now_date != shift_data["date"]:
+        shift_data = {
+            "date": now_date,
+            "turno_atual": 1,
+            "trabalhos": [],
+            "production_in_progress": False
+        }
+
+    # Detecta INÍCIO de trabalho
+    if is_active and not shift_data["production_in_progress"]:
+        shift_data["production_in_progress"] = True
+        # Se já teve um fim de trabalho anterior, incrementa o turno
+        if len(shift_data["trabalhos"]) > 0:
+            shift_data["turno_atual"] += 1
+        
+        shift_data["trabalhos"].append({"inicio": now_time, "fim": "---"})
+        print(f"[TURNO] Inicio de trabalho: {now_time} (Turno {shift_data['turno_atual']})")
+
+    # Detecta FIM de trabalho
+    elif not is_active and shift_data["production_in_progress"]:
+        shift_data["production_in_progress"] = False
+        if shift_data["trabalhos"]:
+            shift_data["trabalhos"][-1]["fim"] = now_time
+        print(f"[TURNO] Fim de trabalho: {now_time}")
+
+def get_uptime_str():
+    diff = int(time.time() - SERVER_START_TIME)
+    days = diff // 86400
+    hours = (diff % 86400) // 3600
+    minutes = (diff % 3600) // 60
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    return f"{hours}h {minutes}m"
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -477,6 +530,9 @@ def video_stream_thread(cam_id):
             global global_production_active
             global_production_active = is_production_active
             
+            # Atualiza estatísticas de turno e eficiência
+            update_shift_stats(is_production_active)
+            
             text_x = frame.shape[1] - 420  # Lado superior direito
             
             if not is_production_active:
@@ -591,6 +647,24 @@ def handle_config():
         CONFIG.update(request.json)
         return jsonify({"status": "success", "config": CONFIG})
     return jsonify(CONFIG)
+
+@app.route('/get_stats')
+def get_stats():
+    """Retorna estatísticas de turno, uptime e produção para o dashboard."""
+    return jsonify({
+        "uptime": get_uptime_str(),
+        "turno": shift_data["turno_atual"],
+        "inicio": shift_data["trabalhos"][-1]["inicio"] if shift_data["trabalhos"] else "---",
+        "fim": shift_data["trabalhos"][-1]["fim"] if shift_data["trabalhos"] else "---",
+        "total_alerts": len(alert_history)
+    })
+
+@app.route('/clear_alerts', methods=['POST'])
+def clear_alerts_route():
+    global alert_history
+    alert_history = []
+    print("[SERVER] Histórico de alertas limpo em memória.")
+    return jsonify({"status": "success"})
 
 @app.route('/snapshot/<cam_id>')
 def snapshot(cam_id):
