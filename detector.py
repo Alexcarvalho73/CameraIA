@@ -334,8 +334,8 @@ def detect_production_active(frame, roi_points):
     # Conta o número de pixels "coloridos" na ROI
     colored_area = np.sum(color_mask > 0)
     
-    # Limiar: Se tiver mais de 10.000 pixels coloridos, consideramos produção ativa
-    return colored_area > 10000
+    # Limiar: Elevado para 40.000 pixels para evitar que a camisa do operador dispare falso positivo
+    return colored_area > 40000
 
 
 if __name__ == "__main__":

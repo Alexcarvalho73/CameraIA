@@ -52,7 +52,8 @@ CAMERAS = {
             "cofre":     [[800, 20],  [1150, 20],  [1150, 300], [800, 300]],
             "descarte":  [[850, 320], [1150, 320], [1150, 600], [850, 600]],
             "pockets":   [[850, 650], [1150, 650], [1150, 900], [850, 900]],
-            "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]]
+            "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]],
+            "esteira_producao": [[1550, 20], [1910, 20], [1910, 1050], [1400, 1050]]
         },
         "type": "behavior_detection",
         "alerts_enabled": False,    # Câmera 02 com alertas PAUSADOS
@@ -470,11 +471,13 @@ def video_stream_thread(cam_id):
             # ── Detecção de Produção (Esteira Cheia ou Vazia) ──
             is_production_active = detect_production_active(frame, roi_points)
             
+            text_x = frame.shape[1] - 420  # Lado superior direito
+            
             if not is_production_active:
-                cv2.putText(frame, "SEM PRODUCAO", (50, 50),
+                cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
             else:
-                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (50, 50),
+                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 
                 # ── Detecção de Movimento da Esteira ──
@@ -508,13 +511,16 @@ def video_stream_thread(cam_id):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
-            # Para a Camera 02, usamos a "work_area" para saber se há produção na bancada
-            is_production_active = detect_production_active(frame, np.array(cam_cfg["zones"]["work_area"]))
+            # Para a Camera 02, usamos a "esteira_producao" para saber se há produção na bancada
+            is_production_active = detect_production_active(frame, np.array(cam_cfg["zones"]["esteira_producao"]))
+            
+            text_x = frame.shape[1] - 420  # Lado superior direito
+
             if not is_production_active:
-                cv2.putText(frame, "SEM PRODUCAO", (50, 50),
+                cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
             else:
-                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (50, 50),
+                cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 # Só audita se tiver produção (economiza muita CPU no YOLO Pose)
                 frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
