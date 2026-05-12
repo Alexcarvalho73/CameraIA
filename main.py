@@ -51,7 +51,6 @@ CAMERAS = {
         "zones": {
             "cofre":     [[800, 20],  [1150, 20],  [1150, 300], [800, 300]],
             "descarte":  [[850, 320], [1150, 320], [1150, 600], [850, 600]],
-            "pockets":   [[850, 650], [1150, 650], [1150, 900], [850, 900]],
             "work_area": [[700, 20],  [1300, 20],  [1300, 1050],[700, 1050]],
             "esteira_producao": [[1550, 20], [1910, 20], [1910, 1050], [1400, 1050]]
         },
@@ -389,10 +388,10 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
         cv2.putText(frame, "FURO DETECTADO", (820, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    # ── Heurística 1: Mão no bolso / cintura
-    pocket_pts = np.array(zones["pockets"])
+    # ── Heurística 1: Mão fora da bancada (bolso / cintura)
+    work_pts = np.array(zones["work_area"])
     hand_in_pocket = any(
-        cv2.pointPolygonTest(pocket_pts, (float(h['center'][0]), float(h['center'][1])), False) >= 0
+        cv2.pointPolygonTest(work_pts, (float(h['center'][0]), float(h['center'][1])), False) < 0
         for h in hands
     )
     if hand_in_pocket:

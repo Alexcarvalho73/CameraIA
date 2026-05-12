@@ -134,11 +134,11 @@
 
     // Cores por zona
     const ZONE_COLORS = {
-        cofre:     { stroke: '#00ff64', fill: 'rgba(0,255,100,0.15)' },
-        descarte:  { stroke: '#00e5ff', fill: 'rgba(0,229,255,0.12)' },
-        pockets:   { stroke: '#ff9800', fill: 'rgba(255,152,0,0.12)' },
-        work_area: { stroke: '#ffffff', fill: 'rgba(255,255,255,0.05)' },
-        roi:       { stroke: '#ffcc00', fill: 'rgba(255,204,0,0.12)' }
+        cofre:            { stroke: '#00ff64', fill: 'rgba(0,255,100,0.15)' },
+        descarte:         { stroke: '#00e5ff', fill: 'rgba(0,229,255,0.12)' },
+        work_area:        { stroke: '#ffffff', fill: 'rgba(255,255,255,0.05)' },
+        esteira_producao: { stroke: '#ff9800', fill: 'rgba(255,152,0,0.12)' },
+        roi:              { stroke: '#ffcc00', fill: 'rgba(255,204,0,0.12)' }
     };
 
     // ── Ao mudar câmera ──────────────────────────────────────────────────────
@@ -162,7 +162,7 @@
         const zoneNames = Object.keys(allZones.zones || {});
         if (zoneNames.length > 0) {
             row.classList.add('visible');
-            const labels = { cofre: 'Cofre (Furo)', descarte: 'Descarte', pockets: 'Cintura/Bolso', work_area: 'Área de Trabalho' };
+            const labels = { cofre: 'Cofre (Furo)', descarte: 'Descarte', work_area: 'Área de Trabalho', esteira_producao: 'Esteira Produção' };
             zoneNames.forEach(z => {
                 const opt = document.createElement('option');
                 opt.value = z;
@@ -178,7 +178,7 @@
     function onZoneChange() {
         const zone = document.getElementById('zone-select').value;
         const badge = document.getElementById('zone-badge');
-        const colorMap = { cofre:'#00ff64', descarte:'#00e5ff', pockets:'#ff9800', work_area:'#aaa', '':'#ffcc00' };
+        const colorMap = { cofre:'#00ff64', descarte:'#00e5ff', work_area:'#aaa', esteira_producao:'#ff9800', '':'#ffcc00' };
         badge.textContent = zone || 'ROI Principal';
         badge.style.background = colorMap[zone] || '#ffcc00';
         badge.style.color = '#000';
