@@ -1,5 +1,16 @@
 import cv2
 import numpy as np
+import logging
+
+# Suprime logs excessivos do Ultralytics
+logging.getLogger("ultralytics").setLevel(logging.WARNING)
+from ultralytics import YOLO
+
+try:
+    pose_model = YOLO('yolov8n-pose.pt')
+except Exception as e:
+    pose_model = None
+    print(f"[AVISO] Falha ao carregar YOLO Pose: {e}")
 
 # Estados para Auditoria da Câmera 02
 STATE_IDLE    = "IDLE"
@@ -110,34 +121,53 @@ class BlobTracker:
 # DETECÇÃO DE OPERADOR (capacete branco)
 # ─────────────────────────────────────────────────────────────────────────────
 def detect_operators(frame, roi_points=None):
-    """Detecta todos os capacetes brancos presentes na cena."""
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower_white = np.array([0, 0, 210])
-    upper_white = np.array([180, 30, 255])
-    mask = cv2.inRange(hsv, lower_white, upper_white)
-
-    if roi_points is not None:
-        roi_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-        cv2.fillPoly(roi_mask, [roi_points], 255)
-        mask = cv2.bitwise_and(mask, roi_mask)
-
-    kernel = np.ones((5, 5), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    """Detecta pessoas (operadores) e extrai o esqueleto (pulsos e cabeça) usando YOLO Pose."""
     operators = []
-    for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if 1000 < area < 8000:
-            x, y, w, h = cv2.boundingRect(cnt)
-            center = (x + w // 2, y + h // 2)
-            if center[1] > 1000: # Ignora reflexos muito baixos se houver
-                continue
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0: continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > 0.55:
-                operators.append({'center': center, 'rect': (x, y, w, h)})
+    if pose_model is None:
+        return operators
+
+    # Roda o modelo apenas para a classe 0 (person)
+    results = pose_model(frame, verbose=False, conf=0.45, classes=[0])
+    
+    for r in results:
+        boxes = r.boxes.xyxy.cpu().numpy()
+        # Shape dos keypoints: (num_pessoas, 17, 2)
+        keypoints = r.keypoints.xy.cpu().numpy() if r.keypoints is not None else []
+        confs = r.keypoints.conf.cpu().numpy() if r.keypoints is not None else []
+        
+        for i, box in enumerate(boxes):
+            x1, y1, x2, y2 = map(int, box)
+            w = x2 - x1
+            h = y2 - y1
+            
+            # Centro default é o meio da bounding box
+            center = (x1 + w // 2, y1 + h // 2)
+            wrists = []
+            
+            if len(keypoints) > i and len(keypoints[i]) >= 11:
+                kp = keypoints[i]
+                c_conf = confs[i]
+                
+                # Se o nariz (0) tiver boa confiança, usamos ele como 'center' para saber se abaixou
+                if c_conf[0] > 0.4:
+                    center = (int(kp[0][0]), int(kp[0][1]))
+                    
+                # Pulso Esquerdo (9)
+                if c_conf[9] > 0.35:
+                    wrists.append((int(kp[9][0]), int(kp[9][1])))
+                # Pulso Direito (10)
+                if c_conf[10] > 0.35:
+                    wrists.append((int(kp[10][0]), int(kp[10][1])))
+            
+            op_data = {'center': center, 'rect': (x1, y1, w, h), 'wrists': wrists}
+            
+            # Se houver ROI, verifica se o centro está dentro
+            if roi_points is not None:
+                if cv2.pointPolygonTest(roi_points, (float(center[0]), float(center[1])), False) >= 0:
+                    operators.append(op_data)
+            else:
+                operators.append(op_data)
+                
     return operators
 
 
@@ -232,13 +262,19 @@ def detect_green_stain(frame, roi_polygon):
     upper_glove = np.array([32, 255, 255])
     glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
-    # 2. Lógica de Vínculo: Só anula o amarelo se estiver muito perto de uma pessoa
+    # 2. Lógica de Vínculo: Só anula o amarelo ao redor dos pulsos (esqueleto)
     confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     if operators:
         for op in operators:
-            # Raio de 280px é suficiente para os braços sem invadir o centro da esteira
             proximity_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
-            cv2.circle(proximity_mask, op['center'], 280, 255, -1)
+            
+            # Se detectou os pulsos do esqueleto, cria máscara de exclusão cirúrgica de 90px
+            if 'wrists' in op and op['wrists']:
+                for wrist in op['wrists']:
+                    cv2.circle(proximity_mask, wrist, 90, 255, -1)
+            else:
+                # Fallback: Se não viu as mãos, faz um círculo menor no centro do corpo/cabeça
+                cv2.circle(proximity_mask, op['center'], 140, 255, -1)
             
             op_glove = cv2.bitwise_and(glove_candidates_mask, proximity_mask)
             confirmed_glove_mask = cv2.bitwise_or(confirmed_glove_mask, op_glove)
