@@ -475,7 +475,7 @@ def video_stream_thread(cam_id):
             
             if not is_production_active:
                 cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             else:
                 cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
@@ -518,7 +518,7 @@ def video_stream_thread(cam_id):
 
             if not is_production_active:
                 cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (150, 150, 150), 2)
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             else:
                 cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
