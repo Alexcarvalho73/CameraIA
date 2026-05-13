@@ -547,6 +547,64 @@
                 <!-- Preenchido via JS -->
             </div>
 
+            <!-- Seção de Configurações Avançadas (Motor IA) -->
+            <div id="advanced-settings-section" style="margin-top: 30px; padding-top: 25px; border-top: 1px solid rgba(255,255,255,0.1);">
+                <h4 style="font-size: 14px; color: var(--secondary); margin-bottom: 15px; display: flex; align-items: center; gap: 8px;">
+                    🧠 Motor IA - Calibração de Fel
+                </h4>
+                
+                <!-- Faixa de Cor 1 -->
+                <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 12px; margin-bottom: 15px;">
+                    <p style="font-size: 11px; font-weight: 700; opacity: 0.7; margin-bottom: 10px; color: var(--primary);">FAIXA DE COR 1 (FEL CLARO/AMARELO)</p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Início (H, S, V)</label>
+                            <div style="display: flex; gap: 4px;">
+                                <input type="number" id="cfg-fel_lower_h1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                                <input type="number" id="cfg-fel_lower_s1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                                <input type="number" id="cfg-fel_lower_v1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Fim (H, S, V)</label>
+                            <div style="display: flex; gap: 4px;">
+                                <input type="number" id="cfg-fel_upper_h1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                                <input type="number" id="cfg-fel_upper_s1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                                <input type="number" id="cfg-fel_upper_v1" style="width:100%; padding:5px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:11px; border-radius:4px;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Parâmetros de Tempo/FPS -->
+                <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 12px; margin-bottom: 20px;">
+                    <p style="font-size: 11px; font-weight: 700; opacity: 0.7; margin-bottom: 10px; color: var(--primary);">REGRAS DE TEMPO E PERSISTÊNCIA</p>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Hits Identificação (frames)</label>
+                            <input type="number" id="cfg-min_frames_id" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Hits Alerta (frames)</label>
+                            <input type="number" id="cfg-min_frames_alert" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Delay p/ Alerta (segundos)</label>
+                            <input type="number" step="0.1" id="cfg-min_delay_sec" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
+                        </div>
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Tolerância Pulo (pixels)</label>
+                            <input type="number" id="cfg-max_jump_px" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
+                        </div>
+                    </div>
+                </div>
+
+                <button onclick="saveAdvancedConfig()" id="btn-save-advanced" style="width: 100%; padding: 12px; background: var(--primary); color: #0f172a; border: none; border-radius: 10px; cursor: pointer; font-weight: 700; font-size: 13px; transition: 0.3s;">
+                    💾 Salvar Configurações Avançadas
+                </button>
+                <p style="font-size: 10px; opacity: 0.4; text-align: center; margin-top: 8px;">As alterações serão aplicadas instantaneamente e persistidas em disco.</p>
+            </div>
+
             <div style="margin-top: 30px; display: flex; justify-content: flex-end;">
                 <button onclick="closeSettingsModal()" style="padding: 10px 25px; background: rgba(255,255,255,0.05); color: white; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px; cursor: pointer; font-weight: 600;">
                     Fechar
@@ -640,6 +698,73 @@
                 });
             } catch (e) {
                 listEl.innerHTML = '<p style="color:var(--danger); text-align:center;">Erro ao carregar configurações.</p>';
+            }
+
+            // Carrega também as configurações avançadas
+            await loadAdvancedConfig();
+        }
+
+        async function loadAdvancedConfig() {
+            try {
+                const res = await fetch('/config');
+                const config = await res.json();
+                
+                // Preenche os inputs
+                const keys = [
+                    'fel_lower_h1', 'fel_lower_s1', 'fel_lower_v1',
+                    'fel_upper_h1', 'fel_upper_s1', 'fel_upper_v1',
+                    'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px'
+                ];
+                
+                keys.forEach(key => {
+                    const el = document.getElementById(`cfg-${key}`);
+                    if (el) el.value = config[key];
+                });
+            } catch (e) {
+                console.error("Erro ao carregar configuração avançada:", e);
+            }
+        }
+
+        async function saveAdvancedConfig() {
+            const btn = document.getElementById('btn-save-advanced');
+            const originalText = btn.innerText;
+            btn.innerText = 'Salvando...';
+            btn.disabled = true;
+
+            const keys = [
+                'fel_lower_h1', 'fel_lower_s1', 'fel_lower_v1',
+                'fel_upper_h1', 'fel_upper_s1', 'fel_upper_v1',
+                'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px'
+            ];
+
+            const newConfig = {};
+            keys.forEach(key => {
+                const val = document.getElementById(`cfg-${key}`).value;
+                newConfig[key] = key.includes('sec') ? parseFloat(val) : parseInt(val);
+            });
+
+            try {
+                const res = await fetch('/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(newConfig)
+                });
+                
+                if (res.ok) {
+                    btn.innerText = '✅ Configurações Salvas!';
+                    btn.style.background = 'var(--success)';
+                    btn.style.color = 'white';
+                    setTimeout(() => {
+                        btn.innerText = originalText;
+                        btn.style.background = 'var(--primary)';
+                        btn.style.color = '#0f172a';
+                        btn.disabled = false;
+                    }, 3000);
+                }
+            } catch (e) {
+                alert('Erro ao salvar configurações.');
+                btn.innerText = originalText;
+                btn.disabled = false;
             }
         }
 

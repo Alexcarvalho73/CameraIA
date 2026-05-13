@@ -76,22 +76,27 @@ def load_roi_config():
     try:
         with open(ROI_CONFIG_FILE, 'r') as f:
             saved = json.load(f)
-        for cam_id, cfg in saved.items():
+        for key, val in saved.items():
+            if key == "global_config":
+                CONFIG.update(val)
+                continue
+            
+            cam_id = key
             if cam_id not in CAMERAS:
                 continue
-            if 'roi' in cfg:
-                CAMERAS[cam_id]['roi'] = cfg['roi']
-            if 'phone_number' in cfg:
-                CAMERAS[cam_id]['phone_number'] = cfg['phone_number']
-            if 'zones' in cfg and 'zones' in CAMERAS[cam_id]:
-                for zone_name, pts in cfg['zones'].items():
+            if 'roi' in val:
+                CAMERAS[cam_id]['roi'] = val['roi']
+            if 'phone_number' in val:
+                CAMERAS[cam_id]['phone_number'] = val['phone_number']
+            if 'zones' in val and 'zones' in CAMERAS[cam_id]:
+                for zone_name, pts in val['zones'].items():
                     CAMERAS[cam_id]['zones'][zone_name] = pts
         print(f"[ROI] Configurações carregadas de '{ROI_CONFIG_FILE}'.")
     except Exception as e:
         print(f"[ROI] Erro ao carregar '{ROI_CONFIG_FILE}': {e}")
 
 def persist_roi_config():
-    """Salva o estado atual dos ROIs em disco."""
+    """Salva o estado atual dos ROIs e configurações em disco."""
     try:
         data = {}
         for cam_id, cfg in CAMERAS.items():
@@ -102,6 +107,10 @@ def persist_roi_config():
                 data[cam_id]['phone_number'] = cfg['phone_number']
             if 'zones' in cfg:
                 data[cam_id]['zones'] = cfg['zones']
+        
+        # Salva configurações globais
+        data["global_config"] = {k: v for k, v in CONFIG.items() if k != "last_alert_time"}
+        
         with open(ROI_CONFIG_FILE, 'w') as f:
             json.dump(data, f, indent=2)
         print(f"[ROI] Configurações persistidas em '{ROI_CONFIG_FILE}'.")
@@ -146,7 +155,20 @@ def add_audit_log(message):
 # ─────────────────────────────────────────────────────────────────────────────
 CONFIG = {
     "alert_cooldown": 20,      # segundos entre alertas da mesma câmera
-    "last_alert_time": {}
+    "last_alert_time": {},
+    
+    # Parâmetros de Detecção de Fel
+    "fel_lower_h1": 22, "fel_lower_s1": 55, "fel_lower_v1": 40,
+    "fel_upper_h1": 90, "fel_upper_s1": 255, "fel_upper_v1": 255,
+    "fel_lower_h2": 35, "fel_lower_s2": 30, "fel_lower_v2": 20,
+    "fel_upper_h2": 95, "fel_upper_s2": 255, "fel_upper_v2": 120,
+    
+    # Parâmetros do Rastreador
+    "min_frames_id": 10,
+    "min_frames_alert": 10,
+    "min_delay_sec": 5.0,
+    "max_jump_px": 150
+}
 }
 
 alert_history    = []
@@ -585,11 +607,23 @@ def video_stream_thread(cam_id):
                 # Se não houver zonas definidas, usa o ROI principal
                 if not mask_polys: mask_polys = [roi_points]
 
+                # Prepara configuração de detecção vinda do CONFIG global
+                det_config = {
+                    'lower_fel_a': np.array([CONFIG['fel_lower_h1'], CONFIG['fel_lower_s1'], CONFIG['fel_lower_v1']]),
+                    'upper_fel_a': np.array([CONFIG['fel_upper_h1'], CONFIG['fel_upper_s1'], CONFIG['fel_upper_v1']]),
+                    'lower_fel_b': np.array([CONFIG['fel_lower_h2'], CONFIG['fel_lower_s2'], CONFIG['fel_lower_v2']]),
+                    'upper_fel_b': np.array([CONFIG['fel_upper_h2'], CONFIG['fel_upper_s2'], CONFIG['fel_upper_v2']]),
+                    'min_frames_id': CONFIG['min_frames_id'],
+                    'min_frames_alert': CONFIG['min_frames_alert'],
+                    'min_delay_sec': CONFIG['min_delay_sec'],
+                    'max_jump_px': CONFIG['max_jump_px']
+                }
+
                 # Processamento Pesado só ocorre com produção ativa
-                candidates, _ = detect_green_stain(frame, mask_polys)
+                candidates, _ = detect_green_stain(frame, mask_polys, config=det_config)
                 
                 tracker   = blob_trackers.get(cam_id)
-                confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
+                confirmed = tracker.update(candidates, id_poly, alert_poly, config=det_config) if tracker else []
                 
                 any_should_alert = False
                 for det in confirmed:
@@ -702,6 +736,7 @@ def camera_status():
 def handle_config():
     if request.method == 'POST':
         CONFIG.update(request.json)
+        persist_roi_config()
         return jsonify({"status": "success", "config": CONFIG})
     return jsonify(CONFIG)
 
@@ -953,9 +988,21 @@ def video_feed(cam_id):
                 if alert_poly is not None: mask_polys.append(alert_poly)
                 if not mask_polys: mask_polys = [roi_points]
 
-                candidates, _ = detect_green_stain(frame, mask_polys)
+                # Prepara configuração (Teste)
+                det_config = {
+                    'lower_fel_a': np.array([CONFIG['fel_lower_h1'], CONFIG['fel_lower_s1'], CONFIG['fel_lower_v1']]),
+                    'upper_fel_a': np.array([CONFIG['fel_upper_h1'], CONFIG['fel_upper_s1'], CONFIG['fel_upper_v1']]),
+                    'lower_fel_b': np.array([CONFIG['fel_lower_h2'], CONFIG['fel_lower_s2'], CONFIG['fel_lower_v2']]),
+                    'upper_fel_b': np.array([CONFIG['fel_upper_h2'], CONFIG['fel_upper_s2'], CONFIG['fel_upper_v2']]),
+                    'min_frames_id': CONFIG['min_frames_id'],
+                    'min_frames_alert': CONFIG['min_frames_alert'],
+                    'min_delay_sec': CONFIG['min_delay_sec'],
+                    'max_jump_px': CONFIG['max_jump_px']
+                }
+
+                candidates, _ = detect_green_stain(frame, mask_polys, config=det_config)
                 tracker   = blob_trackers.get("test_feed")
-                confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
+                confirmed = tracker.update(candidates, id_poly, alert_poly, config=det_config) if tracker else []
                 
                 any_should_alert = False
                 for det in confirmed:

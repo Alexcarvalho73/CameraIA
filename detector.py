@@ -42,11 +42,17 @@ class BlobTracker:
         self.min_delay_sec = min_delay_sec
         self.max_jump_px = max_jump_px
 
-    def update(self, detections, id_poly=None, alert_poly=None):
+    def update(self, detections, id_poly=None, alert_poly=None, config={}):
         """
         Atualiza o rastreador com as detecções do frame atual.
         """
         import time
+        # Atualiza parâmetros se fornecidos no config
+        self.min_frames_id = config.get('min_frames_id', self.min_frames_id)
+        self.min_frames_alert = config.get('min_frames_alert', self.min_frames_alert)
+        self.min_delay_sec = config.get('min_delay_sec', self.min_delay_sec)
+        self.max_jump_px = config.get('max_jump_px', self.max_jump_px)
+
         current = []
         for det in detections:
             x, y, w, h = det['rect']
@@ -302,7 +308,7 @@ def _detect_glove_regions(hsv_full_frame):
 # ─────────────────────────────────────────────────────────────────────────────
 # DETECÇÃO DE FEL – retorna CANDIDATOS (validação temporal feita pelo BlobTracker)
 # ─────────────────────────────────────────────────────────────────────────────
-def detect_green_stain(frame, roi_polygon):
+def detect_green_stain(frame, roi_polygon, config={}):
     """
     Detecta candidatos de mancha de fel dentro da ROI com filtragem por proximidade humana e cor estrita.
     """
@@ -359,15 +365,13 @@ def detect_green_stain(frame, roi_polygon):
     strict_yellow_mask = cv2.dilate(strict_yellow_mask, np.ones((11, 11), np.uint8))
 
     # 3. Detecta Fel (Verde/Amarelo-Verde) - DUAL RANGE
-    # Range A: Fel Vibrante/Claro (incluindo tons mais amarelados)
-    # Baixamos Hue de 30 para 22 para pegar o fel amarelo citado pelo usuário
-    lower_fel_a = np.array([22, 40, 40])
-    upper_fel_a = np.array([85, 255, 255])
+    # Range A: Fel Vibrante/Claro
+    # Range B: Fel Escuro/Oliva
     
-    # Range B: Fel Escuro/Oliva (o "líquido chato" e espesso)
-    # S=30 e V=20 permitem pegar tons muito escuros e menos saturados de verde
-    lower_fel_b = np.array([35, 30, 20])
-    upper_fel_b = np.array([95, 255, 120])
+    lower_fel_a = config.get('lower_fel_a', np.array([22, 55, 40]))
+    upper_fel_a = config.get('upper_fel_a', np.array([90, 255, 255]))
+    lower_fel_b = config.get('lower_fel_b', np.array([35, 30, 20]))
+    upper_fel_b = config.get('upper_fel_b', np.array([95, 255, 120]))
     
     mask_a = cv2.inRange(hsv, lower_fel_a, upper_fel_a)
     mask_b = cv2.inRange(hsv, lower_fel_b, upper_fel_b)
