@@ -255,16 +255,16 @@ def _detect_glove_regions(hsv_full_frame):
 # ─────────────────────────────────────────────────────────────────────────────
 def detect_green_stain(frame, roi_polygon):
     """
-    Detecta candidatos de mancha de fel dentro da ROI com filtragem por proximidade humana.
+    Detecta candidatos de mancha de fel dentro da ROI com filtragem por proximidade humana e cor estrita.
     """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
     # 1. Detecta Operadores e Luvas
     operators = detect_operators(frame)
     
-    # Luvas: Amarelo muito específico e vibrante
-    lower_glove = np.array([18, 100, 100])
-    upper_glove = np.array([32, 255, 255])
+    # Luvas: Amarelo muito específico e vibrante (Hue 15-35)
+    lower_glove = np.array([15, 100, 100])
+    upper_glove = np.array([35, 255, 255])
     glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
     # 2. Lógica de Vínculo: Usar Componentes Conectados para isolar SÓ a luva
@@ -273,6 +273,10 @@ def detect_green_stain(frame, roi_polygon):
     
     confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     
+    # Máscara de "Amarelo Proibido" (independente de pose, para evitar falsos positivos críticos)
+    # Se for muito amarelo e muito saturado, provavelmente é luva.
+    strict_yellow_mask = cv2.inRange(hsv, np.array([18, 150, 100]), np.array([34, 255, 255]))
+
     if operators:
         for cnt in contours_yellow:
             if cv2.contourArea(cnt) < 150:
@@ -299,26 +303,28 @@ def detect_green_stain(frame, roi_polygon):
                             break
                 if is_glove:
                     break
-                    
+            
             if is_glove:
                 # Desenha APENAS essa bolha exata na máscara de anulação
                 cv2.drawContours(confirmed_glove_mask, [cnt], -1, 255, -1)
                 
-    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((11, 11), np.uint8))
+    confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((15, 15), np.uint8))
+    strict_yellow_mask = cv2.dilate(strict_yellow_mask, np.ones((11, 11), np.uint8))
 
-    # 3. Detecta Fel (Verde/Amarelo)
-    # S=50 aumenta a sensibilidade para fel diluído
-    lower_fel = np.array([30, 50, 40])
-    upper_fel = np.array([90, 255, 255])
+    # 3. Detecta Fel (Verde/Amarelo-Verde)
+    # Aumentamos o Hue inicial para 38 para sair do range do amarelo puro (30-35)
+    lower_fel = np.array([38, 50, 40])
+    upper_fel = np.array([85, 255, 255])
     fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
     
     # Prepara ROI
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
     cv2.fillPoly(mask_roi, [roi_polygon], 255)
     
-    # FILTRAGEM: ROI - LUVAS CONFIRMADAS (PERTO DE PESSOAS)
+    # FILTRAGEM: ROI - LUVAS CONFIRMADAS - AMARELO ESTRITO
     fel_mask = cv2.bitwise_and(fel_mask, mask_roi)
     fel_mask = cv2.subtract(fel_mask, confirmed_glove_mask)
+    fel_mask = cv2.subtract(fel_mask, strict_yellow_mask)
 
     # Limpeza morfológica
     kernel   = np.ones((7, 7), np.uint8)
@@ -330,7 +336,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 800: continue # Sensibilidade aumentada (área menor permitida)
+        if area < 1000: continue # Área mínima aumentada ligeiramente para filtrar ruído
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
 
