@@ -27,38 +27,26 @@ STATE_WASTE   = "WASTE"
 class BlobTracker:
     """
     Rastreador temporal de blobs para diferenciar fel de luvas.
-
-    Princípio observado:
-      - Luva: aparece/some rapidamente ou pula de posição frame a frame.
-      - Fel:  permanece no mesmo local (ou desliza linearmente com a esteira)
-              por vários frames consecutivos.
-
-    Um blob só é "confirmado" após ser visto por `min_frames` consecutivos
-    sem pular mais de `max_jump_px` pixels entre frames.
+    Implementa lógica de duas áreas: Identificação e Alerta.
+    
+    Regra:
+    1. Objeto deve ser identificado na Área de Identificação por no mínimo `min_frames_id` frames.
+    2. Após identificado, deve-se aguardar no mínimo `min_delay_sec` segundos.
+    3. Após esse tempo, o objeto deve ser detectado na Área de Alerta por no mínimo `min_frames_alert` frames.
     """
 
-    def __init__(self, min_frames=8, max_jump_px=100, min_displacement=30):
-        """
-        min_frames      : frames consecutivos necessários para confirmar fel
-        max_jump_px     : deslocamento máximo entre frames para ser o mesmo blob
-        min_displacement: pixels de deslocamento líquido total para confirmar que está se movendo com a esteira
-        """
-        self.candidates  = []
-        self.min_frames  = min_frames
+    def __init__(self, min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100):
+        self.candidates = []
+        self.min_frames_id = min_frames_id
+        self.min_frames_alert = min_frames_alert
+        self.min_delay_sec = min_delay_sec
         self.max_jump_px = max_jump_px
-        self.min_displacement = min_displacement
 
-    def update(self, detections, y_entry_limit=None, y_exit_limit=None):
+    def update(self, detections, id_poly=None, alert_poly=None):
         """
         Atualiza o rastreador com as detecções do frame atual.
-        Inclui lógica de deslocamento, Origem Espacial (Início) e Destino (Fim) 
-        para diferenciar luvas de fel.
-        
-        Args:
-            detections: lista de detecções atuais.
-            y_entry_limit: (Opcional) Valor Y máximo (topo) para aceitar novos objetos.
-            y_exit_limit: (Opcional) Valor Y mínimo (fundo) para disparar o alerta.
         """
+        import time
         current = []
         for det in detections:
             x, y, w, h = det['rect']
@@ -69,12 +57,12 @@ class BlobTracker:
                 'area': det['area'],
             })
 
-        new_candidates  = []
+        new_candidates = []
         matched_current = set()
 
         # Associa candidatos existentes a detecções atuais
         for cand in self.candidates:
-            best_idx  = None
+            best_idx = None
             best_dist = self.max_jump_px
 
             for i, cur in enumerate(current):
@@ -84,62 +72,89 @@ class BlobTracker:
                         (cand['cy'] - cur['cy']) ** 2) ** 0.5
                 if dist < best_dist:
                     best_dist = dist
-                    best_idx  = i
+                    best_idx = i
 
             if best_idx is not None:
                 matched_current.add(best_idx)
                 cur = current[best_idx]
-                new_candidates.append({
-                    'cx':       cur['cx'],
-                    'cy':       cur['cy'],
-                    'start_cx': cand['start_cx'],
-                    'start_cy': cand['start_cy'],
-                    'rect':     cur['rect'],
-                    'area':     cur['area'],
-                    'frames':   cand['frames'] + 1,
-                    'has_reached_end': cand.get('has_reached_end', False) or (y_exit_limit is not None and cur['cy'] >= y_exit_limit)
-                })
+                
+                # Atualiza dados do candidato
+                cand['cx'] = cur['cx']
+                cand['cy'] = cur['cy']
+                cand['rect'] = cur['rect']
+                cand['area'] = cur['area']
+                cand['last_seen'] = time.time()
+
+                # Verifica em qual área o blob está
+                in_id = False
+                in_alert = False
+                if id_poly is not None:
+                    in_id = cv2.pointPolygonTest(id_poly, (float(cur['cx']), float(cur['cy'])), False) >= 0
+                if alert_poly is not None:
+                    in_alert = cv2.pointPolygonTest(alert_poly, (float(cur['cx']), float(cur['cy'])), False) >= 0
+
+                # Lógica de Identificação
+                if in_id:
+                    cand['id_hits'] += 1
+                    if cand['id_hits'] >= self.min_frames_id and not cand['is_identified']:
+                        cand['is_identified'] = True
+                        cand['id_timestamp'] = time.time()
+                
+                # Lógica de Alerta
+                if cand['is_identified'] and in_alert:
+                    time_passed = time.time() - cand['id_timestamp']
+                    if time_passed >= self.min_delay_sec:
+                        cand['alert_hits'] += 1
+                        if cand['alert_hits'] >= self.min_frames_alert:
+                            cand['should_alert'] = True
+                
+                new_candidates.append(cand)
 
         # Blobs novos sem correspondência anterior
         for i, cur in enumerate(current):
             if i not in matched_current:
+                # Verifica se o novo blob já nasce em alguma área
+                in_id = False
+                if id_poly is not None:
+                    in_id = cv2.pointPolygonTest(id_poly, (float(cur['cx']), float(cur['cy'])), False) >= 0
+                
                 new_candidates.append({
-                    'cx':       cur['cx'],
-                    'cy':       cur['cy'],
-                    'start_cx': cur['cx'],
-                    'start_cy': cur['cy'],
-                    'rect':     cur['rect'],
-                    'area':     cur['area'],
-                    'frames':   1,
-                    'has_reached_end': (y_exit_limit is not None and cur['cy'] >= y_exit_limit)
+                    'cx': cur['cx'],
+                    'cy': cur['cy'],
+                    'rect': cur['rect'],
+                    'area': cur['area'],
+                    'id_hits': 1 if in_id else 0,
+                    'alert_hits': 0,
+                    'is_identified': False,
+                    'id_timestamp': 0,
+                    'should_alert': False,
+                    'last_seen': time.time()
                 })
 
-        self.candidates = new_candidates
+        # Remove candidatos que sumiram há mais de 2 segundos (ou frames)
+        # Para evitar que o rastreador fique "sujo" com objetos que saíram
+        self.candidates = [c for c in new_candidates if time.time() - c['last_seen'] < 1.0]
 
-        # Filtro de Confirmação: Persistência + Deslocamento + Origem
+        # Retorna apenas os blobs que estão confirmados para alerta ou sendo rastreados
         confirmed = []
         for c in self.candidates:
-            if c['frames'] >= self.min_frames:
-                # 1. Calcula o deslocamento total
-                dx = c['cx'] - c['start_cx']
-                dy = c['cy'] - c['start_cy']
-                total_dist = (dx**2 + dy**2)**0.5
-                
-                # 2. Critérios de Aprovação:
-                # - Deve ter se movido (esteira)
-                # - Deve ter "nascido" no topo da ROI (Início)
-                is_moving = total_dist >= self.min_displacement
-                starts_at_top = (y_entry_limit is None or c['start_cy'] <= y_entry_limit)
+            # Informação visual
+            status_txt = ""
+            if c['should_alert']:
+                status_txt = "ALERTA"
+            elif c['is_identified']:
+                dt = time.time() - c['id_timestamp']
+                status_txt = f"ID ({dt:.1f}s)"
+            else:
+                status_txt = f"HI {c['id_hits']}"
 
-                if is_moving and starts_at_top:
-                    # Se atingiu o fim e começou no topo, marcamos como pronto para alerta
-                    should_alert = c['has_reached_end']
-                    confirmed.append({
-                        'rect': c['rect'],
-                        'area': c['area'],
-                        'frames': c['frames'],
-                        'should_alert': should_alert
-                    })
+            confirmed.append({
+                'rect': c['rect'],
+                'area': c['area'],
+                'status': status_txt,
+                'should_alert': c['should_alert'],
+                'is_identified': c['is_identified']
+            })
                 
         return confirmed
 

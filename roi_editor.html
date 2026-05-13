@@ -138,6 +138,8 @@
         descarte:         { stroke: '#00e5ff', fill: 'rgba(0,229,255,0.12)' },
         work_area:        { stroke: '#ffffff', fill: 'rgba(255,255,255,0.05)' },
         esteira_producao: { stroke: '#ff9800', fill: 'rgba(255,152,0,0.12)' },
+        identificacao:    { stroke: '#00ff00', fill: 'rgba(0,255,0,0.12)' },
+        alerta:           { stroke: '#ff0000', fill: 'rgba(255,0,0,0.12)' },
         roi:              { stroke: '#ffcc00', fill: 'rgba(255,204,0,0.12)' }
     };
 
@@ -162,7 +164,14 @@
         const zoneNames = Object.keys(allZones.zones || {});
         if (zoneNames.length > 0) {
             row.classList.add('visible');
-            const labels = { cofre: 'Cofre (Furo)', descarte: 'Descarte', work_area: 'Área de Trabalho', esteira_producao: 'Esteira Produção' };
+            const labels = { 
+                cofre: 'Cofre (Furo)', 
+                descarte: 'Descarte', 
+                work_area: 'Área de Trabalho', 
+                esteira_producao: 'Esteira Produção',
+                identificacao: 'Identificação (Cam 01)',
+                alerta: 'Alerta (Cam 01)'
+            };
             zoneNames.forEach(z => {
                 const opt = document.createElement('option');
                 opt.value = z;
@@ -178,7 +187,10 @@
     function onZoneChange() {
         const zone = document.getElementById('zone-select').value;
         const badge = document.getElementById('zone-badge');
-        const colorMap = { cofre:'#00ff64', descarte:'#00e5ff', work_area:'#aaa', esteira_producao:'#ff9800', '':'#ffcc00' };
+        const colorMap = { 
+            cofre:'#00ff64', descarte:'#00e5ff', work_area:'#aaa', esteira_producao:'#ff9800', 
+            identificacao:'#00ff00', alerta:'#ff0000', '': '#ffcc00' 
+        };
         badge.textContent = zone || 'ROI Principal';
         badge.style.background = colorMap[zone] || '#ffcc00';
         badge.style.color = '#000';

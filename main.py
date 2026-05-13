@@ -40,6 +40,10 @@ CAMERAS = {
         "name": "Esteira Principal - Ruptura",
         "rtsp_url": "rtsp://admin:013579ab@10.200.34.50:554/cam/realmonitor?channel=1&subtype=0",
         "roi": [[280, 375], [790, 320], [810, 710], [195, 750]],
+        "zones": {
+            "identificacao": [[280, 375], [790, 320], [800, 500], [240, 550]],
+            "alerta": [[240, 550], [800, 500], [810, 710], [195, 750]]
+        },
         "type": "color_detection",
         "alerts_enabled": True,     # Câmera 01 com alertas ATIVOS
         "phone_number": "5511000000000" # Configure aqui o número real
@@ -155,8 +159,8 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames=8, max_jump_px=100),
-    "test_feed":  BlobTracker(min_frames=8, max_jump_px=100),
+    "camera_01": BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100),
+    "test_feed":  BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100),
 }
 
 
@@ -571,31 +575,46 @@ def video_stream_thread(cam_id):
                 # Processamento Pesado só ocorre com produção ativa
                 candidates, _ = detect_green_stain(frame, roi_points)
                 
-                # Regra de Origem Espacial: Só aceita vazamentos que "nascem" no topo da esteira (25%)
-                # E só gera alerta se chegarem ao final da esteira (80%)
-                y_coords = [p[1] for p in roi_points]
-                min_y, max_y = min(y_coords), max(y_coords)
-                y_entry_limit = min_y + (max_y - min_y) * 0.50
-                y_exit_limit  = min_y + (max_y - min_y) * 0.80
+                # Regras de Áreas (Identificação e Alerta)
+                zones = cam_cfg.get("zones", {})
+                id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
+                alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
                 
                 tracker   = blob_trackers.get(cam_id)
-                confirmed = tracker.update(candidates, y_entry_limit, y_exit_limit) if tracker else candidates
+                confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
                 
                 any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
-                    frames_txt = det.get('frames', '')
+                    status_txt = det.get('status', '')
                     should_alert = det.get('should_alert', False)
+                    is_identified = det.get('is_identified', False)
                     
-                    # Cor do retângulo: Vermelho se for alerta, Amarelo se for apenas detecção em trânsito
-                    rect_color = (0, 0, 255) if should_alert else (0, 255, 255)
+                    # Cor do retângulo: Vermelho (Alerta), Verde (Identificado), Amarelo (Rastreando)
+                    if should_alert:
+                        rect_color = (0, 0, 255)
+                    elif is_identified:
+                        rect_color = (0, 255, 0)
+                    else:
+                        rect_color = (0, 255, 255)
+
                     cv2.rectangle(frame, (x, y), (x+w, y+h), rect_color, 2)
-                    cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
+                    cv2.putText(frame, status_txt, (x, y - 6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, rect_color, 1)
                     
                     if should_alert:
                         any_should_alert = True
                 
+                # Desenha as áreas de Identificação e Alerta
+                if id_poly is not None:
+                    cv2.polylines(frame, [id_poly], True, (0, 255, 0), 1)
+                    cv2.putText(frame, "ID AREA", (id_poly[0][0], id_poly[0][1]-5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+                if alert_poly is not None:
+                    cv2.polylines(frame, [alert_poly], True, (0, 0, 255), 1)
+                    cv2.putText(frame, "ALERT AREA", (alert_poly[0][0], alert_poly[0][1]-5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
                 if any_should_alert and is_moving:
                     trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
                 elif confirmed and not is_moving:
@@ -915,28 +934,42 @@ def video_feed(cam_id):
                     is_moving = movement > 1.5
                 last_roi_frames["test_feed"] = roi_gray
 
-                # Regra de Origem Espacial (Teste)
-                y_coords = [p[1] for p in roi_points]
-                min_y, max_y = min(y_coords), max(y_coords)
-                y_entry_limit = min_y + (max_y - min_y) * 0.25
-                y_exit_limit  = min_y + (max_y - min_y) * 0.80
+                # Regras de Áreas (Teste)
+                zones = cam_cfg.get("zones", {})
+                id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
+                alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
 
                 candidates, _ = detect_green_stain(frame, roi_points)
                 tracker   = blob_trackers.get("test_feed")
-                confirmed = tracker.update(candidates, y_entry_limit, y_exit_limit) if tracker else candidates
+                confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
                 
                 any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
+                    status_txt = det.get('status', '')
                     should_alert = det.get('should_alert', False)
-                    rect_color = (0, 0, 255) if should_alert else (0, 255, 255)
+                    is_identified = det.get('is_identified', False)
+
+                    # Cor do retângulo
+                    if should_alert:
+                        rect_color = (0, 0, 255)
+                    elif is_identified:
+                        rect_color = (0, 255, 0)
+                    else:
+                        rect_color = (0, 255, 255)
                     
                     cv2.rectangle(frame, (x, y), (x+w, y+h), rect_color, 2)
-                    cv2.putText(frame, f"FEL ({det.get('frames','')}f)", (x, y - 6),
+                    cv2.putText(frame, status_txt, (x, y - 6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, rect_color, 1)
                     
                     if should_alert:
                         any_should_alert = True
+
+                # Desenha as áreas (Teste)
+                if id_poly is not None:
+                    cv2.polylines(frame, [id_poly], True, (0, 255, 0), 1)
+                if alert_poly is not None:
+                    cv2.polylines(frame, [alert_poly], True, (0, 0, 255), 1)
                 
                 if any_should_alert and is_moving:
                     cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)",
