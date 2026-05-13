@@ -274,9 +274,9 @@ def detect_green_stain(frame, roi_polygon):
     # 1. Detecta Operadores e Luvas
     operators = detect_operators(frame)
     
-    # Luvas: Amarelo muito específico e vibrante (Hue 15-35)
-    lower_glove = np.array([15, 100, 100])
-    upper_glove = np.array([35, 255, 255])
+    # Luvas: Amarelo Sólido, muito saturado e brilhante (Cor industrial)
+    lower_glove = np.array([15, 160, 100])
+    upper_glove = np.array([33, 255, 255])
     glove_candidates_mask = cv2.inRange(hsv, lower_glove, upper_glove)
     
     # 2. Lógica de Vínculo: Usar Componentes Conectados para isolar SÓ a luva
@@ -286,8 +286,8 @@ def detect_green_stain(frame, roi_polygon):
     confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     
     # Máscara de "Amarelo Proibido" (independente de pose, para evitar falsos positivos críticos)
-    # Se for MUITO amarelo e MUITO saturado, provavelmente é luva.
-    strict_yellow_mask = cv2.inRange(hsv, np.array([20, 180, 100]), np.array([32, 255, 255]))
+    # Focada no núcleo da luva (muito amarelo e saturado)
+    strict_yellow_mask = cv2.inRange(hsv, np.array([18, 180, 150]), np.array([32, 255, 255]))
 
     if operators:
         for cnt in contours_yellow:
@@ -299,12 +299,10 @@ def detect_green_stain(frame, roi_polygon):
                 if 'wrists' in op and op['wrists']:
                     for w in op['wrists']:
                         dist = cv2.pointPolygonTest(cnt, (float(w[0]), float(w[1])), True)
-                        # Se o pulso está a até 120 pixels da bolha amarela, é a luva!
                         if dist >= -120:
                             is_glove = True
                             break
                 else:
-                    # Fallback: Se não achou pulso, vê se o centro da bolha amarela está na caixa da pessoa
                     M = cv2.moments(cnt)
                     if M["m00"] != 0:
                         cx = int(M["m10"] / M["m00"])
@@ -317,17 +315,24 @@ def detect_green_stain(frame, roi_polygon):
                     break
             
             if is_glove:
-                # Desenha APENAS essa bolha exata na máscara de anulação
                 cv2.drawContours(confirmed_glove_mask, [cnt], -1, 255, -1)
                 
     confirmed_glove_mask = cv2.dilate(confirmed_glove_mask, np.ones((15, 15), np.uint8))
     strict_yellow_mask = cv2.dilate(strict_yellow_mask, np.ones((11, 11), np.uint8))
 
-    # 3. Detecta Fel (Verde/Amarelo-Verde)
-    # Revertido para 30 para não perder detecções, confiando agora na lógica de deslocamento
-    lower_fel = np.array([30, 50, 40])
-    upper_fel = np.array([85, 255, 255])
-    fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
+    # 3. Detecta Fel (Verde/Amarelo-Verde) - DUAL RANGE
+    # Range A: Fel Vibrante/Claro (o que o sistema já pegava)
+    lower_fel_a = np.array([30, 40, 40])
+    upper_fel_a = np.array([85, 255, 255])
+    
+    # Range B: Fel Escuro/Oliva (o "líquido chato" e espesso)
+    # S=30 e V=20 permitem pegar tons muito escuros e menos saturados de verde
+    lower_fel_b = np.array([35, 30, 20])
+    upper_fel_b = np.array([95, 255, 120])
+    
+    mask_a = cv2.inRange(hsv, lower_fel_a, upper_fel_a)
+    mask_b = cv2.inRange(hsv, lower_fel_b, upper_fel_b)
+    fel_mask = cv2.bitwise_or(mask_a, mask_b)
     
     # Prepara ROI
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -348,7 +353,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 800: continue # Área mínima restaurada
+        if area < 600: continue # Área reduzida para pegar inícios de vazamento
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
 
