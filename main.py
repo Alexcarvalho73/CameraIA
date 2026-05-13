@@ -179,7 +179,7 @@ shift_data = {
     "production_in_progress": False
 }
 
-def update_shift_stats(is_active):
+def update_shift_stats(is_active, frame=None):
     global shift_data
     now_date = time.strftime("%Y-%m-%d")
     now_time = time.strftime("%H:%M:%S")
@@ -202,12 +202,26 @@ def update_shift_stats(is_active):
         
         shift_data["trabalhos"].append({"inicio": now_time, "fim": "---"})
         print(f"[TURNO] Inicio de trabalho: {now_time} (Turno {shift_data['turno_atual']})")
+        
+        # Alerta Oracle: Início de Turno
+        msg = f"Inicio Turno {shift_data['turno_atual']} as {now_time}"
+        phone = CAMERAS.get("camera_01", {}).get("phone_number")
+        if phone and frame is not None:
+            insert_alert_to_db(phone, msg, frame)
 
     # Detecta FIM de trabalho
     elif not is_active and shift_data["production_in_progress"]:
         shift_data["production_in_progress"] = False
         if shift_data["trabalhos"]:
             shift_data["trabalhos"][-1]["fim"] = now_time
+            trabalho = shift_data["trabalhos"][-1]
+            
+            # Alerta Oracle: Fim de Turno
+            msg = f"Turno {shift_data['turno_atual']}, Inicio as {trabalho['inicio']} e Fim as {now_time}"
+            phone = CAMERAS.get("camera_01", {}).get("phone_number")
+            if phone and frame is not None:
+                insert_alert_to_db(phone, msg, frame)
+                
         print(f"[TURNO] Fim de trabalho: {now_time}")
 
 def get_uptime_str():
@@ -531,7 +545,7 @@ def video_stream_thread(cam_id):
             global_production_active = is_production_active
             
             # Atualiza estatísticas de turno e eficiência
-            update_shift_stats(is_production_active)
+            update_shift_stats(is_production_active, frame)
             
             text_x = frame.shape[1] - 420  # Lado superior direito
             
