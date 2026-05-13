@@ -169,7 +169,6 @@ CONFIG = {
     "min_delay_sec": 5.0,
     "max_jump_px": 150
 }
-}
 
 alert_history    = []
 latest_frames    = {}
