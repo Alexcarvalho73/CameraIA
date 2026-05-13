@@ -48,10 +48,14 @@ class BlobTracker:
         self.max_jump_px = max_jump_px
         self.min_displacement = min_displacement
 
-    def update(self, detections):
+    def update(self, detections, y_entry_limit=None):
         """
         Atualiza o rastreador com as detecções do frame atual.
-        Inclui lógica de deslocamento para diferenciar luvas (estáticas) de fel (em movimento).
+        Inclui lógica de deslocamento e Origem Espacial para diferenciar luvas de fel.
+        
+        Args:
+            detections: lista de detecções atuais.
+            y_entry_limit: (Opcional) Valor Y máximo (topo) para aceitar novos objetos.
         """
         current = []
         for det in detections:
@@ -108,18 +112,22 @@ class BlobTracker:
 
         self.candidates = new_candidates
 
-        # Filtro de Confirmação: Persistência + Deslocamento (Vetor da Esteira)
+        # Filtro de Confirmação: Persistência + Deslocamento + Origem
         confirmed = []
         for c in self.candidates:
             if c['frames'] >= self.min_frames:
-                # Calcula o deslocamento total desde que o blob apareceu
+                # 1. Calcula o deslocamento total
                 dx = c['cx'] - c['start_cx']
                 dy = c['cy'] - c['start_cy']
                 total_dist = (dx**2 + dy**2)**0.5
                 
-                # Regra de Ouro: O fel se move com a esteira (dx e dy positivos na Cam 01)
-                # Luvas ficam "estáticas" ou balançam pouco.
-                if total_dist >= self.min_displacement:
+                # 2. Critérios de Aprovação:
+                # - Deve ter se movido (esteira)
+                # - Deve ter "nascido" no topo da ROI (opcional, se y_entry_limit for passado)
+                is_moving = total_dist >= self.min_displacement
+                starts_at_top = (y_entry_limit is None or c['start_cy'] <= y_entry_limit)
+
+                if is_moving and starts_at_top:
                     confirmed.append(c)
                 
         return [{'rect': c['rect'], 'area': c['area'], 'frames': c['frames']}

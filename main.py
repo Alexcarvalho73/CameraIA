@@ -556,8 +556,14 @@ def video_stream_thread(cam_id):
 
                 # Processamento Pesado só ocorre com produção ativa
                 candidates, _ = detect_green_stain(frame, roi_points)
-                tracker  = blob_trackers.get(cam_id)
-                confirmed = tracker.update(candidates) if tracker else candidates
+                
+                # Regra de Origem Espacial: Só aceita vazamentos que "nascem" no topo da esteira (45%)
+                y_coords = [p[1] for p in roi_points]
+                min_y, max_y = min(y_coords), max(y_coords)
+                y_entry_limit = min_y + (max_y - min_y) * 0.45
+                
+                tracker   = blob_trackers.get(cam_id)
+                confirmed = tracker.update(candidates, y_entry_limit) if tracker else candidates
                 
                 for det in confirmed:
                     x, y, w, h = det['rect']
