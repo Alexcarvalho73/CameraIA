@@ -557,22 +557,32 @@ def video_stream_thread(cam_id):
                 # Processamento Pesado só ocorre com produção ativa
                 candidates, _ = detect_green_stain(frame, roi_points)
                 
-                # Regra de Origem Espacial: Só aceita vazamentos que "nascem" no topo da esteira (45%)
+                # Regra de Origem Espacial: Só aceita vazamentos que "nascem" no topo da esteira (25%)
+                # E só gera alerta se chegarem ao final da esteira (80%)
                 y_coords = [p[1] for p in roi_points]
                 min_y, max_y = min(y_coords), max(y_coords)
-                y_entry_limit = min_y + (max_y - min_y) * 0.45
+                y_entry_limit = min_y + (max_y - min_y) * 0.40
+                y_exit_limit  = min_y + (max_y - min_y) * 0.80
                 
                 tracker   = blob_trackers.get(cam_id)
-                confirmed = tracker.update(candidates, y_entry_limit) if tracker else candidates
+                confirmed = tracker.update(candidates, y_entry_limit, y_exit_limit) if tracker else candidates
                 
+                any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
                     frames_txt = det.get('frames', '')
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                    should_alert = det.get('should_alert', False)
+                    
+                    # Cor do retângulo: Vermelho se for alerta, Amarelo se for apenas detecção em trânsito
+                    rect_color = (0, 0, 255) if should_alert else (0, 255, 255)
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), rect_color, 2)
                     cv2.putText(frame, f"FEL ({frames_txt}f)", (x, y - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, rect_color, 1)
+                    
+                    if should_alert:
+                        any_should_alert = True
                 
-                if confirmed and is_moving:
+                if any_should_alert and is_moving:
                     trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
                 elif confirmed and not is_moving:
                     cv2.putText(frame, "ESTEIRA PARADA - ALERTA BLOQUEADO", (50, 85),
@@ -891,16 +901,30 @@ def video_feed(cam_id):
                     is_moving = movement > 1.5
                 last_roi_frames["test_feed"] = roi_gray
 
+                # Regra de Origem Espacial (Teste)
+                y_coords = [p[1] for p in roi_points]
+                min_y, max_y = min(y_coords), max(y_coords)
+                y_entry_limit = min_y + (max_y - min_y) * 0.25
+                y_exit_limit  = min_y + (max_y - min_y) * 0.80
+
                 candidates, _ = detect_green_stain(frame, roi_points)
                 tracker   = blob_trackers.get("test_feed")
-                confirmed = tracker.update(candidates) if tracker else candidates
+                confirmed = tracker.update(candidates, y_entry_limit, y_exit_limit) if tracker else candidates
+                
+                any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                    should_alert = det.get('should_alert', False)
+                    rect_color = (0, 0, 255) if should_alert else (0, 255, 255)
+                    
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), rect_color, 2)
                     cv2.putText(frame, f"FEL ({det.get('frames','')}f)", (x, y - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, rect_color, 1)
+                    
+                    if should_alert:
+                        any_should_alert = True
                 
-                if confirmed and is_moving:
+                if any_should_alert and is_moving:
                     cv2.putText(frame, "ALERTA: RUPTURA DETECTADA (TESTE)",
                                 (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                     trigger_alert(f"[TESTE] Rompimento - {cam_cfg['name']}", frame, "test_feed")

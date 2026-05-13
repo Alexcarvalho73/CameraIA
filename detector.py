@@ -48,14 +48,16 @@ class BlobTracker:
         self.max_jump_px = max_jump_px
         self.min_displacement = min_displacement
 
-    def update(self, detections, y_entry_limit=None):
+    def update(self, detections, y_entry_limit=None, y_exit_limit=None):
         """
         Atualiza o rastreador com as detecções do frame atual.
-        Inclui lógica de deslocamento e Origem Espacial para diferenciar luvas de fel.
+        Inclui lógica de deslocamento, Origem Espacial (Início) e Destino (Fim) 
+        para diferenciar luvas de fel.
         
         Args:
             detections: lista de detecções atuais.
             y_entry_limit: (Opcional) Valor Y máximo (topo) para aceitar novos objetos.
+            y_exit_limit: (Opcional) Valor Y mínimo (fundo) para disparar o alerta.
         """
         current = []
         for det in detections:
@@ -95,6 +97,7 @@ class BlobTracker:
                     'rect':     cur['rect'],
                     'area':     cur['area'],
                     'frames':   cand['frames'] + 1,
+                    'has_reached_end': cand.get('has_reached_end', False) or (y_exit_limit is not None and cur['cy'] >= y_exit_limit)
                 })
 
         # Blobs novos sem correspondência anterior
@@ -108,6 +111,7 @@ class BlobTracker:
                     'rect':     cur['rect'],
                     'area':     cur['area'],
                     'frames':   1,
+                    'has_reached_end': (y_exit_limit is not None and cur['cy'] >= y_exit_limit)
                 })
 
         self.candidates = new_candidates
@@ -123,15 +127,21 @@ class BlobTracker:
                 
                 # 2. Critérios de Aprovação:
                 # - Deve ter se movido (esteira)
-                # - Deve ter "nascido" no topo da ROI (opcional, se y_entry_limit for passado)
+                # - Deve ter "nascido" no topo da ROI (Início)
                 is_moving = total_dist >= self.min_displacement
                 starts_at_top = (y_entry_limit is None or c['start_cy'] <= y_entry_limit)
 
                 if is_moving and starts_at_top:
-                    confirmed.append(c)
+                    # Se atingiu o fim e começou no topo, marcamos como pronto para alerta
+                    should_alert = c['has_reached_end']
+                    confirmed.append({
+                        'rect': c['rect'],
+                        'area': c['area'],
+                        'frames': c['frames'],
+                        'should_alert': should_alert
+                    })
                 
-        return [{'rect': c['rect'], 'area': c['area'], 'frames': c['frames']}
-                for c in confirmed]
+        return confirmed
 
     def reset(self):
         self.candidates = []
