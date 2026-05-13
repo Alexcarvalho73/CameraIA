@@ -109,6 +109,10 @@ class BlobTracker:
                             cand['should_alert'] = True
                 
                 new_candidates.append(cand)
+            else:
+                # Candidato NÃO encontrado neste frame.
+                # Mantemos ele na lista para tentar casar no próximo (persitência contra flickering)
+                new_candidates.append(cand)
 
         # Blobs novos sem correspondência anterior
         for i, cur in enumerate(current):
@@ -320,7 +324,8 @@ def detect_green_stain(frame, roi_polygon):
     
     # Máscara de "Amarelo Proibido" (independente de pose, para evitar falsos positivos críticos)
     # Focada no núcleo da luva (muito amarelo e saturado)
-    strict_yellow_mask = cv2.inRange(hsv, np.array([18, 180, 150]), np.array([32, 255, 255]))
+    # Saturation aumentada para 200 para evitar pegar bile amarelada
+    strict_yellow_mask = cv2.inRange(hsv, np.array([18, 200, 150]), np.array([32, 255, 255]))
 
     if operators:
         for cnt in contours_yellow:
@@ -354,8 +359,9 @@ def detect_green_stain(frame, roi_polygon):
     strict_yellow_mask = cv2.dilate(strict_yellow_mask, np.ones((11, 11), np.uint8))
 
     # 3. Detecta Fel (Verde/Amarelo-Verde) - DUAL RANGE
-    # Range A: Fel Vibrante/Claro (o que o sistema já pegava)
-    lower_fel_a = np.array([30, 40, 40])
+    # Range A: Fel Vibrante/Claro (incluindo tons mais amarelados)
+    # Baixamos Hue de 30 para 22 para pegar o fel amarelo citado pelo usuário
+    lower_fel_a = np.array([22, 40, 40])
     upper_fel_a = np.array([85, 255, 255])
     
     # Range B: Fel Escuro/Oliva (o "líquido chato" e espesso)
@@ -367,9 +373,12 @@ def detect_green_stain(frame, roi_polygon):
     mask_b = cv2.inRange(hsv, lower_fel_b, upper_fel_b)
     fel_mask = cv2.bitwise_or(mask_a, mask_b)
     
-    # Prepara ROI
+    # Prepara ROI (pode ser um único polígono ou uma lista de polígonos)
     mask_roi = np.zeros(frame.shape[:2], dtype=np.uint8)
-    cv2.fillPoly(mask_roi, [roi_polygon], 255)
+    if isinstance(roi_polygon, (list, tuple)):
+        cv2.fillPoly(mask_roi, roi_polygon, 255)
+    else:
+        cv2.fillPoly(mask_roi, [roi_polygon], 255)
     
     # FILTRAGEM: ROI - LUVAS CONFIRMADAS - AMARELO ESTRITO
     fel_mask = cv2.bitwise_and(fel_mask, mask_roi)

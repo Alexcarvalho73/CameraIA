@@ -159,8 +159,8 @@ test_video_speed = 1.0
 
 # BlobTrackers por câmera — exigem persistência temporal para confirmar fel
 blob_trackers = {
-    "camera_01": BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100),
-    "test_feed":  BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100),
+    "camera_01": BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=150),
+    "test_feed":  BlobTracker(min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=150),
 }
 
 
@@ -572,13 +572,21 @@ def video_stream_thread(cam_id):
                     is_moving = movement > 1.5 # Limiar de movimento
                 last_roi_frames[cam_id] = roi_gray
 
-                # Processamento Pesado só ocorre com produção ativa
-                candidates, _ = detect_green_stain(frame, roi_points)
-                
                 # Regras de Áreas (Identificação e Alerta)
                 zones = cam_cfg.get("zones", {})
                 id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
                 alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
+                
+                # Só processa detecção dentro das áreas de Identificação e Alerta
+                mask_polys = []
+                if id_poly is not None: mask_polys.append(id_poly)
+                if alert_poly is not None: mask_polys.append(alert_poly)
+                
+                # Se não houver zonas definidas, usa o ROI principal
+                if not mask_polys: mask_polys = [roi_points]
+
+                # Processamento Pesado só ocorre com produção ativa
+                candidates, _ = detect_green_stain(frame, mask_polys)
                 
                 tracker   = blob_trackers.get(cam_id)
                 confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
@@ -939,7 +947,13 @@ def video_feed(cam_id):
                 id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
                 alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
 
-                candidates, _ = detect_green_stain(frame, roi_points)
+                # Filtro de áreas (Teste)
+                mask_polys = []
+                if id_poly is not None: mask_polys.append(id_poly)
+                if alert_poly is not None: mask_polys.append(alert_poly)
+                if not mask_polys: mask_polys = [roi_points]
+
+                candidates, _ = detect_green_stain(frame, mask_polys)
                 tracker   = blob_trackers.get("test_feed")
                 confirmed = tracker.update(candidates, id_poly, alert_poly) if tracker else []
                 
