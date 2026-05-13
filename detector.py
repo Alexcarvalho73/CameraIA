@@ -37,24 +37,21 @@ class BlobTracker:
     sem pular mais de `max_jump_px` pixels entre frames.
     """
 
-    def __init__(self, min_frames=7, max_jump_px=110):
+    def __init__(self, min_frames=8, max_jump_px=100, min_displacement=30):
         """
-        min_frames  : frames consecutivos necessários para confirmar fel (~0.35 s a 20 FPS)
-        max_jump_px : deslocamento máximo entre frames para ser o mesmo blob
+        min_frames      : frames consecutivos necessários para confirmar fel
+        max_jump_px     : deslocamento máximo entre frames para ser o mesmo blob
+        min_displacement: pixels de deslocamento líquido total para confirmar que está se movendo com a esteira
         """
         self.candidates  = []
         self.min_frames  = min_frames
         self.max_jump_px = max_jump_px
+        self.min_displacement = min_displacement
 
     def update(self, detections):
         """
         Atualiza o rastreador com as detecções do frame atual.
-
-        Args:
-            detections: lista de dicts {'rect': (x,y,w,h), 'area': int}
-
-        Returns:
-            Lista de detecções confirmadas como fel (blobs persistentes).
+        Inclui lógica de deslocamento para diferenciar luvas (estáticas) de fel (em movimento).
         """
         current = []
         for det in detections:
@@ -87,29 +84,44 @@ class BlobTracker:
                 matched_current.add(best_idx)
                 cur = current[best_idx]
                 new_candidates.append({
-                    'cx':     cur['cx'],
-                    'cy':     cur['cy'],
-                    'rect':   cur['rect'],
-                    'area':   cur['area'],
-                    'frames': cand['frames'] + 1,
+                    'cx':       cur['cx'],
+                    'cy':       cur['cy'],
+                    'start_cx': cand['start_cx'],
+                    'start_cy': cand['start_cy'],
+                    'rect':     cur['rect'],
+                    'area':     cur['area'],
+                    'frames':   cand['frames'] + 1,
                 })
-            # candidato sumiu → descarta (não carrega para o próximo frame)
 
         # Blobs novos sem correspondência anterior
         for i, cur in enumerate(current):
             if i not in matched_current:
                 new_candidates.append({
-                    'cx':     cur['cx'],
-                    'cy':     cur['cy'],
-                    'rect':   cur['rect'],
-                    'area':   cur['area'],
-                    'frames': 1,
+                    'cx':       cur['cx'],
+                    'cy':       cur['cy'],
+                    'start_cx': cur['cx'],
+                    'start_cy': cur['cy'],
+                    'rect':     cur['rect'],
+                    'area':     cur['area'],
+                    'frames':   1,
                 })
 
         self.candidates = new_candidates
 
-        # Retorna apenas os confirmados
-        confirmed = [c for c in self.candidates if c['frames'] >= self.min_frames]
+        # Filtro de Confirmação: Persistência + Deslocamento (Vetor da Esteira)
+        confirmed = []
+        for c in self.candidates:
+            if c['frames'] >= self.min_frames:
+                # Calcula o deslocamento total desde que o blob apareceu
+                dx = c['cx'] - c['start_cx']
+                dy = c['cy'] - c['start_cy']
+                total_dist = (dx**2 + dy**2)**0.5
+                
+                # Regra de Ouro: O fel se move com a esteira (dx e dy positivos na Cam 01)
+                # Luvas ficam "estáticas" ou balançam pouco.
+                if total_dist >= self.min_displacement:
+                    confirmed.append(c)
+                
         return [{'rect': c['rect'], 'area': c['area'], 'frames': c['frames']}
                 for c in confirmed]
 
@@ -274,8 +286,8 @@ def detect_green_stain(frame, roi_polygon):
     confirmed_glove_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
     
     # Máscara de "Amarelo Proibido" (independente de pose, para evitar falsos positivos críticos)
-    # Se for muito amarelo e muito saturado, provavelmente é luva.
-    strict_yellow_mask = cv2.inRange(hsv, np.array([18, 150, 100]), np.array([34, 255, 255]))
+    # Se for MUITO amarelo e MUITO saturado, provavelmente é luva.
+    strict_yellow_mask = cv2.inRange(hsv, np.array([20, 180, 100]), np.array([32, 255, 255]))
 
     if operators:
         for cnt in contours_yellow:
@@ -312,8 +324,8 @@ def detect_green_stain(frame, roi_polygon):
     strict_yellow_mask = cv2.dilate(strict_yellow_mask, np.ones((11, 11), np.uint8))
 
     # 3. Detecta Fel (Verde/Amarelo-Verde)
-    # Aumentamos o Hue inicial para 38 para sair do range do amarelo puro (30-35)
-    lower_fel = np.array([38, 50, 40])
+    # Revertido para 30 para não perder detecções, confiando agora na lógica de deslocamento
+    lower_fel = np.array([30, 50, 40])
     upper_fel = np.array([85, 255, 255])
     fel_mask  = cv2.inRange(hsv, lower_fel, upper_fel)
     
@@ -336,7 +348,7 @@ def detect_green_stain(frame, roi_polygon):
     detections = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 1000: continue # Área mínima aumentada ligeiramente para filtrar ruído
+        if area < 800: continue # Área mínima restaurada
         x, y, w, h = cv2.boundingRect(cnt)
         detections.append({'rect': (x, y, w, h), 'area': area})
 
