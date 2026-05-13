@@ -575,7 +575,7 @@ def video_stream_thread(cam_id):
                 # E só gera alerta se chegarem ao final da esteira (80%)
                 y_coords = [p[1] for p in roi_points]
                 min_y, max_y = min(y_coords), max(y_coords)
-                y_entry_limit = min_y + (max_y - min_y) * 0.40
+                y_entry_limit = min_y + (max_y - min_y) * 0.50
                 y_exit_limit  = min_y + (max_y - min_y) * 0.80
                 
                 tracker   = blob_trackers.get(cam_id)
