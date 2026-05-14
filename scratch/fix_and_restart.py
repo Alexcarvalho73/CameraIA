@@ -6,7 +6,7 @@ user = 'rdt'
 password = 'SRV4l3x4ndr3'
 remote_dir = '/home/rdt/CameraIA'
 
-files_to_upload = ['detector.py']
+files_to_upload = ['detector.py', 'main.py']
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -16,10 +16,12 @@ try:
     ssh.connect(host, username=user, password=password)
     print("Conectado.")
 
-    # 1. Upload do detector.py corrigido
-    print("Enviando detector.py...")
+    # 1. Upload dos arquivos corrigidos
+    print("Enviando arquivos...")
     sftp = ssh.open_sftp()
-    sftp.put('detector.py', f"{remote_dir}/detector.py")
+    for file in files_to_upload:
+        print(f"Enviando {file}...")
+        sftp.put(file, f"{remote_dir}/{file}")
     sftp.close()
     print("Upload concluído.")
 

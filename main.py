@@ -192,6 +192,19 @@ last_roi_frames = {}
 # Estado global de produção (compartilhado). Câmera 01 é a fonte de verdade.
 global_production_active = True
 
+def get_detection_config():
+    """Helper para obter a configuração de detecção atualizada."""
+    return {
+        'lower_fel_a': np.array([CONFIG['fel_lower_h1'], CONFIG['fel_lower_s1'], CONFIG['fel_lower_v1']]),
+        'upper_fel_a': np.array([CONFIG['fel_upper_h1'], CONFIG['fel_upper_s1'], CONFIG['fel_upper_v1']]),
+        'lower_fel_b': np.array([CONFIG['fel_lower_h2'], CONFIG['fel_lower_s2'], CONFIG['fel_lower_v2']]),
+        'upper_fel_b': np.array([CONFIG['fel_upper_h2'], CONFIG['fel_upper_s2'], CONFIG['fel_upper_v2']]),
+        'min_frames_id': CONFIG['min_frames_id'],
+        'min_frames_alert': CONFIG['min_frames_alert'],
+        'min_delay_sec': CONFIG['min_delay_sec'],
+        'max_jump_px': CONFIG['max_jump_px']
+    }
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ESTATÍSTICAS E UPTIME
 # ─────────────────────────────────────────────────────────────────────────────
@@ -615,16 +628,7 @@ def video_stream_thread(cam_id):
                 if not alert_poly is not None: alert_poly = None
 
                 # Prepara configuração de detecção vinda do CONFIG global
-                det_config = {
-                    'lower_fel_a': np.array([CONFIG['fel_lower_h1'], CONFIG['fel_lower_s1'], CONFIG['fel_lower_v1']]),
-                    'upper_fel_a': np.array([CONFIG['fel_upper_h1'], CONFIG['fel_upper_s1'], CONFIG['fel_upper_v1']]),
-                    'lower_fel_b': np.array([CONFIG['fel_lower_h2'], CONFIG['fel_lower_s2'], CONFIG['fel_lower_v2']]),
-                    'upper_fel_b': np.array([CONFIG['fel_upper_h2'], CONFIG['fel_upper_s2'], CONFIG['fel_upper_v2']]),
-                    'min_frames_id': CONFIG['min_frames_id'],
-                    'min_frames_alert': CONFIG['min_frames_alert'],
-                    'min_delay_sec': CONFIG['min_delay_sec'],
-                    'max_jump_px': CONFIG['max_jump_px']
-                }
+                det_config = get_detection_config()
 
                 # Processamento Pesado só ocorre com produção ativa
                 # Voltamos a detectar em TODO o ROI para não perder o rastro no vácuo entre áreas
@@ -1004,6 +1008,7 @@ def video_feed(cam_id):
 
                 # Filtro de áreas (Teste)
                 # Voltamos a detectar em todo o ROI para estabilidade do rastreador
+                det_config = get_detection_config()
                 candidates, _ = detect_green_stain(frame, roi_points, config=det_config)
                 tracker   = blob_trackers.get("test_feed")
                 confirmed = tracker.update(candidates, id_poly, alert_poly, config=det_config) if tracker else []
