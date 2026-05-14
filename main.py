@@ -168,6 +168,7 @@ CONFIG = {
     "min_frames_alert": 10,
     "min_delay_sec": 5.0,
     "max_jump_px": 150,
+    "max_lateral_px": 20,      # Limiar de movimento lateral para resetar hits
     "shift_end_delay_sec": 60  # Tempo de espera para confirmar fim de turno
 }
 
@@ -202,7 +203,8 @@ def get_detection_config():
         'min_frames_id': CONFIG['min_frames_id'],
         'min_frames_alert': CONFIG['min_frames_alert'],
         'min_delay_sec': CONFIG['min_delay_sec'],
-        'max_jump_px': CONFIG['max_jump_px']
+        'max_jump_px': CONFIG['max_jump_px'],
+        'max_lateral_px': CONFIG['max_lateral_px']
     }
 
 # ─────────────────────────────────────────────────────────────────────────────

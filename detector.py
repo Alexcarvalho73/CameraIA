@@ -35,12 +35,13 @@ class BlobTracker:
     3. Após esse tempo, o objeto deve ser detectado na Área de Alerta por no mínimo `min_frames_alert` frames.
     """
 
-    def __init__(self, min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100):
+    def __init__(self, min_frames_id=10, min_frames_alert=10, min_delay_sec=5.0, max_jump_px=100, max_lateral_px=20):
         self.candidates = []
         self.min_frames_id = min_frames_id
         self.min_frames_alert = min_frames_alert
         self.min_delay_sec = min_delay_sec
         self.max_jump_px = max_jump_px
+        self.max_lateral_px = max_lateral_px
 
     def update(self, detections, id_poly=None, alert_poly=None, config={}):
         """
@@ -52,6 +53,7 @@ class BlobTracker:
         self.min_frames_alert = config.get('min_frames_alert', self.min_frames_alert)
         self.min_delay_sec = config.get('min_delay_sec', self.min_delay_sec)
         self.max_jump_px = config.get('max_jump_px', self.max_jump_px)
+        self.max_lateral_px = config.get('max_lateral_px', self.max_lateral_px)
 
         current = []
         for det in detections:
@@ -84,6 +86,16 @@ class BlobTracker:
                 matched_current.add(best_idx)
                 cur = current[best_idx]
                 
+                # ── Filtro de Movimento Lateral ──
+                # Se o deslocamento horizontal for maior que o limiar, consideramos como "lucas" (ruído)
+                # e zeramos a pontuação do objeto.
+                lateral_move = abs(cur['cx'] - cand['cx'])
+                if lateral_move > self.max_lateral_px:
+                    cand['id_hits'] = 0
+                    cand['alert_hits'] = 0
+                    cand['is_identified'] = False
+                    cand['should_alert'] = False
+
                 # Atualiza dados do candidato
                 cand['cx'] = cur['cx']
                 cand['cy'] = cur['cy']
@@ -167,6 +179,7 @@ class BlobTracker:
                 'should_alert': c['should_alert'],
                 'is_identified': c['is_identified']
             })
+
                 
         return confirmed
 
