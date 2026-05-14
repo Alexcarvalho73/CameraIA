@@ -127,9 +127,6 @@ def persist_roi_config():
     except Exception as e:
         print(f"[ROI] Erro ao salvar '{ROI_CONFIG_FILE}': {e}")
 
-# Carrega ROIs salvos ao iniciar (sobrepõe os padrões acima se existir arquivo)
-load_roi_config()
-
 # ─────────────────────────────────────────────────────────────────────────────
 # ESTADO DA AUDITORIA – Câmera 02
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +227,9 @@ shift_data = {
     "production_in_progress": False,
     "last_active_time": time.time()
 }
+
+# Carrega configurações e ROIs salvos em disco (sobrepõe os padrões acima)
+load_roi_config()
 
 def update_shift_stats(is_active, frame=None):
     global shift_data
