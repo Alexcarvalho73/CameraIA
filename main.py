@@ -81,6 +81,13 @@ def load_roi_config():
                 CONFIG.update(val)
                 continue
             
+            if key == "shift_data":
+                # Só carrega o turno se for do mesmo dia
+                if val.get("date") == time.strftime("%Y-%m-%d"):
+                    shift_data.update(val)
+                    print(f"[TURNO] Estado do turno restaurado: Turno {shift_data['turno_atual']}")
+                continue
+            
             cam_id = key
             if cam_id not in CAMERAS:
                 continue
@@ -110,6 +117,9 @@ def persist_roi_config():
         
         # Salva configurações globais
         data["global_config"] = {k: v for k, v in CONFIG.items() if k != "last_alert_time"}
+        
+        # Salva estado dos turnos
+        data["shift_data"] = shift_data
         
         with open(ROI_CONFIG_FILE, 'w') as f:
             json.dump(data, f, indent=2)
@@ -251,6 +261,9 @@ def update_shift_stats(is_active, frame=None):
         shift_data["trabalhos"].append({"inicio": now_time, "fim": "---"})
         print(f"[TURNO] Inicio de trabalho: {now_time} (Turno {shift_data['turno_atual']})")
         
+        # Salva estado imediatamente
+        persist_roi_config()
+
         # Alerta Oracle: Início de Turno
         msg = f"Inicio Turno {shift_data['turno_atual']} as {now_time}"
         phone = CAMERAS.get("camera_01", {}).get("phone_number")
@@ -275,6 +288,7 @@ def update_shift_stats(is_active, frame=None):
                     insert_alert_to_db(phone, msg, frame)
                     
             print(f"[TURNO] Fim de trabalho confirmado após 1 min: {now_time}")
+            persist_roi_config()
 
 def get_uptime_str():
     diff = int(time.time() - SERVER_START_TIME)
