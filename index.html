@@ -596,6 +596,10 @@
                             <label style="font-size: 10px; opacity: 0.5;">Tolerância Pulo (pixels)</label>
                             <input type="number" id="cfg-max_jump_px" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
                         </div>
+                        <div>
+                            <label style="font-size: 10px; opacity: 0.5;">Confirmação Fim Turno (s)</label>
+                            <input type="number" id="cfg-shift_end_delay_sec" style="width:100%; padding:8px; background:rgba(0,0,0,0.3); border:1px solid #444; color:white; font-size:12px; border-radius:6px;">
+                        </div>
                     </div>
                 </div>
 
@@ -713,7 +717,8 @@
                 const keys = [
                     'fel_lower_h1', 'fel_lower_s1', 'fel_lower_v1',
                     'fel_upper_h1', 'fel_upper_s1', 'fel_upper_v1',
-                    'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px'
+                    'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px',
+                    'shift_end_delay_sec'
                 ];
                 
                 keys.forEach(key => {
@@ -734,7 +739,8 @@
             const keys = [
                 'fel_lower_h1', 'fel_lower_s1', 'fel_lower_v1',
                 'fel_upper_h1', 'fel_upper_s1', 'fel_upper_v1',
-                'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px'
+                'min_frames_id', 'min_frames_alert', 'min_delay_sec', 'max_jump_px',
+                'shift_end_delay_sec'
             ];
 
             const newConfig = {};

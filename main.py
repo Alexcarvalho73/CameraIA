@@ -167,7 +167,8 @@ CONFIG = {
     "min_frames_id": 10,
     "min_frames_alert": 10,
     "min_delay_sec": 5.0,
-    "max_jump_px": 150
+    "max_jump_px": 150,
+    "shift_end_delay_sec": 60  # Tempo de espera para confirmar fim de turno
 }
 
 alert_history    = []
@@ -201,11 +202,13 @@ shift_data = {
     "date": time.strftime("%Y-%m-%d"),
     "turno_atual": 1,
     "trabalhos": [], # Lista de {"inicio": "HH:MM", "fim": "HH:MM"}
-    "production_in_progress": False
+    "production_in_progress": False,
+    "last_active_time": time.time()
 }
 
 def update_shift_stats(is_active, frame=None):
     global shift_data
+    now = time.time()
     now_date = time.strftime("%Y-%m-%d")
     now_time = time.strftime("%H:%M:%S")
 
@@ -215,13 +218,18 @@ def update_shift_stats(is_active, frame=None):
             "date": now_date,
             "turno_atual": 1,
             "trabalhos": [],
-            "production_in_progress": False
+            "production_in_progress": False,
+            "last_active_time": now
         }
 
-    # Detecta INÍCIO de trabalho
+    # Se há atividade, atualiza o timestamp do último momento ativo
+    if is_active:
+        shift_data["last_active_time"] = now
+
+    # Detecta INÍCIO de trabalho (Imediato ao detectar carne)
     if is_active and not shift_data["production_in_progress"]:
         shift_data["production_in_progress"] = True
-        # Se já teve um fim de trabalho anterior, incrementa o turno
+        # Se já teve um fim de trabalho anterior no mesmo dia, incrementa o turno
         if len(shift_data["trabalhos"]) > 0:
             shift_data["turno_atual"] += 1
         
@@ -234,20 +242,24 @@ def update_shift_stats(is_active, frame=None):
         if phone and frame is not None:
             insert_alert_to_db(phone, msg, frame)
 
-    # Detecta FIM de trabalho
+    # Detecta FIM de trabalho (Com confirmação de 60 segundos de inatividade)
     elif not is_active and shift_data["production_in_progress"]:
-        shift_data["production_in_progress"] = False
-        if shift_data["trabalhos"]:
-            shift_data["trabalhos"][-1]["fim"] = now_time
-            trabalho = shift_data["trabalhos"][-1]
-            
-            # Alerta Oracle: Fim de Turno
-            msg = f"Turno {shift_data['turno_atual']}, Inicio as {trabalho['inicio']} e Fim as {now_time}"
-            phone = CAMERAS.get("camera_01", {}).get("phone_number")
-            if phone and frame is not None:
-                insert_alert_to_db(phone, msg, frame)
+        time_since_active = now - shift_data["last_active_time"]
+        
+        # Só encerra se estiver "Sem Produção" por mais de 1 minuto
+        if time_since_active >= CONFIG.get("shift_end_delay_sec", 60):
+            shift_data["production_in_progress"] = False
+            if shift_data["trabalhos"]:
+                shift_data["trabalhos"][-1]["fim"] = now_time
+                trabalho = shift_data["trabalhos"][-1]
                 
-        print(f"[TURNO] Fim de trabalho: {now_time}")
+                # Alerta Oracle: Fim de Turno
+                msg = f"Turno {shift_data['turno_atual']}, Inicio as {trabalho['inicio']} e Fim as {now_time}"
+                phone = CAMERAS.get("camera_01", {}).get("phone_number")
+                if phone and frame is not None:
+                    insert_alert_to_db(phone, msg, frame)
+                    
+            print(f"[TURNO] Fim de trabalho confirmado após 1 min: {now_time}")
 
 def get_uptime_str():
     diff = int(time.time() - SERVER_START_TIME)
