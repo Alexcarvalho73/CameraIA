@@ -161,6 +161,8 @@ class BlobTracker:
             confirmed.append({
                 'rect': c['rect'],
                 'area': c['area'],
+                'cx': c['cx'],
+                'cy': c['cy'],
                 'status': status_txt,
                 'should_alert': c['should_alert'],
                 'is_identified': c['is_identified']
