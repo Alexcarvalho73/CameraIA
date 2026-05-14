@@ -610,13 +610,9 @@ def video_stream_thread(cam_id):
                 id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
                 alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
                 
-                # Só processa detecção dentro das áreas de Identificação e Alerta
-                mask_polys = []
-                if id_poly is not None: mask_polys.append(id_poly)
-                if alert_poly is not None: mask_polys.append(alert_poly)
-                
                 # Se não houver zonas definidas, usa o ROI principal
-                if not mask_polys: mask_polys = [roi_points]
+                if not id_poly is not None: id_poly = None # Redundante, mas limpando
+                if not alert_poly is not None: alert_poly = None
 
                 # Prepara configuração de detecção vinda do CONFIG global
                 det_config = {
@@ -631,7 +627,8 @@ def video_stream_thread(cam_id):
                 }
 
                 # Processamento Pesado só ocorre com produção ativa
-                candidates, _ = detect_green_stain(frame, mask_polys, config=det_config)
+                # Voltamos a detectar em TODO o ROI para não perder o rastro no vácuo entre áreas
+                candidates, _ = detect_green_stain(frame, roi_points, config=det_config)
                 
                 tracker   = blob_trackers.get(cam_id)
                 confirmed = tracker.update(candidates, id_poly, alert_poly, config=det_config) if tracker else []
@@ -639,9 +636,21 @@ def video_stream_thread(cam_id):
                 any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
+                    cx, cy = det['cx'], det['cy']
                     status_txt = det.get('status', '')
                     should_alert = det.get('should_alert', False)
                     is_identified = det.get('is_identified', False)
+
+                    # Verifica posição atual em relação às zonas para filtro de visibilidade
+                    in_id = cv2.pointPolygonTest(id_poly, (float(cx), float(cy)), False) >= 0 if id_poly is not None else False
+                    in_alert = cv2.pointPolygonTest(alert_poly, (float(cx), float(cy)), False) >= 0 if alert_poly is not None else False
+
+                    # VISIBILIDADE SELETIVA:
+                    # - Mostra sempre se for ALERTA (Vermelho) ou se já estiver IDENTIFICADO (Verde)
+                    # - Se for rastreamento inicial (Amarelo), só mostra se estiver dentro de uma das zonas
+                    is_visible = should_alert or is_identified or in_id or in_alert
+                    if not is_visible:
+                        continue
                     
                     # Cor do retângulo: Vermelho (Alerta), Verde (Identificado), Amarelo (Rastreando)
                     if should_alert:
@@ -994,33 +1003,25 @@ def video_feed(cam_id):
                 alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
 
                 # Filtro de áreas (Teste)
-                mask_polys = []
-                if id_poly is not None: mask_polys.append(id_poly)
-                if alert_poly is not None: mask_polys.append(alert_poly)
-                if not mask_polys: mask_polys = [roi_points]
-
-                # Prepara configuração (Teste)
-                det_config = {
-                    'lower_fel_a': np.array([CONFIG['fel_lower_h1'], CONFIG['fel_lower_s1'], CONFIG['fel_lower_v1']]),
-                    'upper_fel_a': np.array([CONFIG['fel_upper_h1'], CONFIG['fel_upper_s1'], CONFIG['fel_upper_v1']]),
-                    'lower_fel_b': np.array([CONFIG['fel_lower_h2'], CONFIG['fel_lower_s2'], CONFIG['fel_lower_v2']]),
-                    'upper_fel_b': np.array([CONFIG['fel_upper_h2'], CONFIG['fel_upper_s2'], CONFIG['fel_upper_v2']]),
-                    'min_frames_id': CONFIG['min_frames_id'],
-                    'min_frames_alert': CONFIG['min_frames_alert'],
-                    'min_delay_sec': CONFIG['min_delay_sec'],
-                    'max_jump_px': CONFIG['max_jump_px']
-                }
-
-                candidates, _ = detect_green_stain(frame, mask_polys, config=det_config)
+                # Voltamos a detectar em todo o ROI para estabilidade do rastreador
+                candidates, _ = detect_green_stain(frame, roi_points, config=det_config)
                 tracker   = blob_trackers.get("test_feed")
                 confirmed = tracker.update(candidates, id_poly, alert_poly, config=det_config) if tracker else []
                 
                 any_should_alert = False
                 for det in confirmed:
                     x, y, w, h = det['rect']
+                    cx, cy = det['cx'], det['cy']
                     status_txt = det.get('status', '')
                     should_alert = det.get('should_alert', False)
                     is_identified = det.get('is_identified', False)
+
+                    # Visibilidade seletiva no teste também
+                    in_id = cv2.pointPolygonTest(id_poly, (float(cx), float(cy)), False) >= 0 if id_poly is not None else False
+                    in_alert = cv2.pointPolygonTest(alert_poly, (float(cx), float(cy)), False) >= 0 if alert_poly is not None else False
+                    
+                    if not (should_alert or is_identified or in_id or in_alert):
+                        continue
 
                     # Cor do retângulo
                     if should_alert:
