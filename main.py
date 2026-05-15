@@ -183,6 +183,7 @@ CONFIG = {
 
 alert_history    = []
 latest_frames    = {}
+raw_frames       = {}
 recording_states = {}          # cam_id → cv2.VideoWriter | None
 lock = threading.Lock()
 
@@ -630,34 +631,64 @@ def run_behavior_audit(frame, cam_id, state_data, zones):
 # ─────────────────────────────────────────────────────────────────────────────
 # THREAD DE CAPTURA DE CÂMERA AO VIVO
 # ─────────────────────────────────────────────────────────────────────────────
-def video_stream_thread(cam_id):
+# ─────────────────────────────────────────────────────────────────────────────
+# THREAD DE CAPTURA BRUTA (Sempre pega o frame mais novo do buffer RTSP)
+# ─────────────────────────────────────────────────────────────────────────────
+def camera_capture_thread(cam_id):
     cam_cfg = CAMERAS[cam_id]
-    cap     = cv2.VideoCapture(cam_cfg["rtsp_url"])
-    print(f"Iniciando thread para {cam_id}...")
-
+    url = cam_cfg["rtsp_url"]
+    cap = cv2.VideoCapture(url)
+    
+    # Tenta reduzir o buffer interno do OpenCV (nem todo driver suporta)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    
+    print(f"[CAPTURE] Iniciando thread de captura para {cam_id}...")
+    
     while True:
         ret, frame = cap.read()
         if not ret:
-            print(f"[{cam_id}] Falha ao capturar frame. Reconectando...")
+            print(f"[CAPTURE] {cam_id} desconectada. Reconectando...")
             time.sleep(2)
-            cap.open(cam_cfg["rtsp_url"])
+            cap.open(url)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             continue
+        
+        with lock:
+            raw_frames[cam_id] = frame
+        
+        # Dorme quase nada para não travar a CPU, mas ler o mais rápido possível
+        time.sleep(0.01)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THREAD DE ANÁLISE IA (Consome o frame mais novo e anota)
+# ─────────────────────────────────────────────────────────────────────────────
+def video_stream_thread(cam_id):
+    cam_cfg = CAMERAS[cam_id]
+    print(f"[ANALYSIS] Iniciando thread de análise para {cam_id}...")
+
+    while True:
+        # Pega o frame bruto mais recente do buffer global
+        with lock:
+            frame_raw = raw_frames.get(cam_id)
+        
+        if frame_raw is None:
+            time.sleep(0.1)
+            continue
+            
+        # Faz uma cópia para trabalhar sem travar a captura
+        frame = frame_raw.copy()
         roi_points = np.array(cam_cfg["roi"], np.int32)
 
         if cam_cfg["type"] == "color_detection":
-            # ── Detecção de Produção (Esteira Cheia ou Vazia) ──
-            # Câmera 01 (color_detection) é a fonte de verdade para o estado da esteira
+            # ── Detecção de Produção ──
             is_production_active = detect_production_active(frame, roi_points)
             
             global global_production_active
             global_production_active = is_production_active
             
-            # Atualiza estatísticas de turno e eficiência
             update_shift_stats(is_production_active, frame)
             
-            text_x = frame.shape[1] - 420  # Lado superior direito
-            
+            text_x = frame.shape[1] - 420
             if not is_production_active:
                 cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
@@ -665,7 +696,7 @@ def video_stream_thread(cam_id):
                 cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
                 
-                # ── Detecção de Movimento da Esteira ──
+                # ── Detecção de Movimento ──
                 mask = np.zeros(frame.shape[:2], dtype=np.uint8)
                 cv2.fillPoly(mask, [roi_points], 255)
                 roi_gray = cv2.cvtColor(cv2.bitwise_and(frame, frame, mask=mask), cv2.COLOR_BGR2GRAY)
@@ -674,23 +705,14 @@ def video_stream_thread(cam_id):
                 if cam_id in last_roi_frames:
                     diff = cv2.absdiff(last_roi_frames[cam_id], roi_gray)
                     movement = np.mean(diff[mask > 0]) if np.any(mask > 0) else 0
-                    is_moving = movement > 1.5 # Limiar de movimento
+                    is_moving = movement > 1.5
                 last_roi_frames[cam_id] = roi_gray
 
-                # Regras de Áreas (Identificação e Alerta)
                 zones = cam_cfg.get("zones", {})
                 id_poly = np.array(zones["identificacao"], np.int32) if "identificacao" in zones else None
                 alert_poly = np.array(zones["alerta"], np.int32) if "alerta" in zones else None
                 
-                # Se não houver zonas definidas, usa o ROI principal
-                if not id_poly is not None: id_poly = None # Redundante, mas limpando
-                if not alert_poly is not None: alert_poly = None
-
-                # Prepara configuração de detecção vinda do CONFIG global
                 det_config = get_detection_config()
-
-                # Processamento Pesado só ocorre com produção ativa
-                # Voltamos a detectar em TODO o ROI para não perder o rastro no vácuo entre áreas
                 candidates, _ = detect_green_stain(frame, roi_points, config=det_config)
                 
                 tracker   = blob_trackers.get(cam_id)
@@ -704,41 +726,23 @@ def video_stream_thread(cam_id):
                     should_alert = det.get('should_alert', False)
                     is_identified = det.get('is_identified', False)
 
-                    # Verifica posição atual em relação às zonas para filtro de visibilidade
                     in_id = cv2.pointPolygonTest(id_poly, (float(cx), float(cy)), False) >= 0 if id_poly is not None else False
                     in_alert = cv2.pointPolygonTest(alert_poly, (float(cx), float(cy)), False) >= 0 if alert_poly is not None else False
 
-                    # VISIBILIDADE SELETIVA:
-                    # - Mostra sempre se for ALERTA (Vermelho) ou se já estiver IDENTIFICADO (Verde)
-                    # - Se for rastreamento inicial (Amarelo), só mostra se estiver dentro de uma das zonas
-                    is_visible = should_alert or is_identified or in_id or in_alert
-                    if not is_visible:
+                    if not (should_alert or is_identified or in_id or in_alert):
                         continue
                     
-                    # Cor do retângulo: Vermelho (Alerta), Verde (Identificado), Amarelo (Rastreando)
-                    if should_alert:
-                        rect_color = (0, 0, 255)
-                    elif is_identified:
-                        rect_color = (0, 255, 0)
-                    else:
-                        rect_color = (0, 255, 255)
-
+                    rect_color = (0, 0, 255) if should_alert else (0, 255, 0) if is_identified else (0, 255, 255)
                     cv2.rectangle(frame, (x, y), (x+w, y+h), rect_color, 2)
                     cv2.putText(frame, status_txt, (x, y - 6),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, rect_color, 1)
                     
-                    if should_alert:
-                        any_should_alert = True
+                    if should_alert: any_should_alert = True
                 
-                # Desenha as áreas de Identificação e Alerta
                 if id_poly is not None:
                     cv2.polylines(frame, [id_poly], True, (0, 255, 0), 1)
-                    cv2.putText(frame, "ID AREA", (id_poly[0][0], id_poly[0][1]-5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                 if alert_poly is not None:
                     cv2.polylines(frame, [alert_poly], True, (0, 0, 255), 1)
-                    cv2.putText(frame, "ALERT AREA", (alert_poly[0][0], alert_poly[0][1]-5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
                 if any_should_alert and is_moving:
                     trigger_alert(f"Rompimento detectado - {cam_cfg['name']}", frame, cam_id)
@@ -747,30 +751,27 @@ def video_stream_thread(cam_id):
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
         elif cam_cfg["type"] == "behavior_detection":
-            # Para a Camera 02, usamos o estado detectado pela Câmera 01 (visibilidade melhor)
             is_production_active = global_production_active
-            
-            text_x = frame.shape[1] - 420  # Lado superior direito
-
+            text_x = frame.shape[1] - 420
             if not is_production_active:
                 cv2.putText(frame, "SEM PRODUCAO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
             else:
                 cv2.putText(frame, "PRODUCAO EM ANDAMENTO", (text_x, 50),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                # Só audita se tiver produção (economiza muita CPU no YOLO Pose)
                 frame = run_behavior_audit(frame, cam_id, audit_state[cam_id], cam_cfg["zones"])
 
-        # Desenha o ROI na tela
         cv2.polylines(frame, [roi_points], True, (0, 255, 0), 2)
 
-        # Gravação manual
+        # Gravação e Atualização do Frame para o Flask
         with lock:
             if recording_states.get(cam_id):
                 recording_states[cam_id].write(cv2.resize(frame, (640, 360)))
             latest_frames[cam_id] = frame
 
-        time.sleep(0.05)  # ~20 FPS max, libera CPU
+        # Não precisamos de sleep longo aqui, o tempo de processamento da IA já é o "ritmo"
+        # Mas dormimos um pouquinho para não saturar a thread se a IA for instantânea
+        time.sleep(0.01)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ROTAS FLASK
@@ -1189,7 +1190,12 @@ if __name__ == '__main__':
     os.makedirs('alerts', exist_ok=True)
 
     for cam_id in CAMERAS:
-        t = threading.Thread(target=video_stream_thread, args=(cam_id,), daemon=True)
-        t.start()
+        # Thread de Captura (Lê do RTSP o mais rápido possível)
+        t_cap = threading.Thread(target=camera_capture_thread, args=(cam_id,), daemon=True)
+        t_cap.start()
+        
+        # Thread de Análise (Processa o frame mais novo disponível)
+        t_ana = threading.Thread(target=video_stream_thread, args=(cam_id,), daemon=True)
+        t_ana.start()
 
     app.run(host='0.0.0.0', port=5050, debug=False, threaded=True)
