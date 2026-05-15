@@ -177,7 +177,8 @@ CONFIG = {
     "max_jump_px": 150,
     "max_lateral_px": 20,      # Limiar de movimento lateral para resetar hits
     "shift_end_delay_sec": 300, # Tempo de espera para confirmar fim de turno (5 min)
-    "shift_start_delay_sec": 10 # Tempo de espera para confirmar início de turno (10 s)
+    "shift_start_delay_sec": 10, # Tempo de espera para confirmar início de turno (10 s)
+    "display_fps": 1           # FPS de exibição no navegador (para poupar CPU)
 }
 
 alert_history    = []
@@ -1164,11 +1165,17 @@ def video_feed(cam_id):
                 time.sleep(0.5)
                 continue
 
-            flag, enc = cv2.imencode(".jpg", frame)
+            # OTIMIZAÇÃO: Redimensiona para exibição web (mais leve que o frame original)
+            # E limita o FPS conforme solicitado para não sobrecarregar o processamento
+            display_frame = cv2.resize(frame, (640, 360))
+            flag, enc = cv2.imencode(".jpg", display_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
             if flag:
                 yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n'
                        + enc.tobytes() + b'\r\n\r\n')
-            time.sleep(0.04)   # ~25 FPS para o navegador
+            
+            # Respeita o FPS de exibição configurado (default 1 FPS)
+            wait_time = 1.0 / CONFIG.get("display_fps", 1)
+            time.sleep(wait_time)
 
     if cam_id == "test_feed":
         return Response(generate_test(), mimetype='multipart/x-mixed-replace; boundary=frame')
