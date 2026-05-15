@@ -453,7 +453,7 @@ def trigger_alert(message, frame, cam_id):
     img_path    = os.path.join("alerts", img_name)
     cv2.imwrite(img_path, frame)
 
-    vid_name = f"event_{cam_id}_{timestamp}.mp4"
+    vid_name = f"event_{cam_id}_{timestamp}.webm"
     vid_path = os.path.join("alerts", vid_name)
 
     alert_data = {
@@ -496,16 +496,22 @@ def trigger_alert(message, frame, cam_id):
 
     # Gravação automática de 20 s
     def auto_record():
-        # Preferimos H.264 para navegadores (Chrome/Edge/Firefox)
-        # Tentamos múltiplos FourCCs comuns para H.264
-        codecs = ['avc1', 'H264', 'X264', 'mp4v']
+        # Para Linux/Browser, WebM (VP8) é frequentemente mais compatível com OpenCV/FFmpeg
+        codecs = [('VP80', '.webm'), ('avc1', '.mp4'), ('H264', '.mp4'), ('mp4v', '.mp4')]
         out = None
+        chosen_codec = ""
         
-        for codec in codecs:
+        # Ajusta o caminho se o codec escolhido mudar a extensão
+        final_vid_path = vid_path
+        
+        for codec, ext in codecs:
             fourcc = cv2.VideoWriter_fourcc(*codec)
-            out = cv2.VideoWriter(vid_path, fourcc, 20.0, (640, 360))
+            test_path = vid_path.replace(".webm", ext)
+            out = cv2.VideoWriter(test_path, fourcc, 20.0, (640, 360))
             if out.isOpened():
-                print(f"[RECORD] Gravação iniciada com codec: {codec}")
+                chosen_codec = codec
+                final_vid_path = test_path
+                print(f"[RECORD] Gravação iniciada com codec: {codec} em {final_vid_path}")
                 break
             else:
                 out.release()
@@ -514,19 +520,26 @@ def trigger_alert(message, frame, cam_id):
             print(f"[RECORD] Erro crítico: Nenhum codec funcionou para {vid_path}")
             return
 
+        frames_written = 0
         end_t  = time.time() + 20
         while time.time() < end_t:
             with lock:
-                if cam_id in latest_frames and latest_frames[cam_id] is not None:
+                # Usamos o frame bruto para a gravação ser mais limpa ou o anotado? 
+                # O usuário quer ver o que a IA fez, então usamos o latest_frames (anotado)
+                frame_to_save = latest_frames.get(cam_id)
+                
+                if frame_to_save is not None:
                     try:
-                        resized = cv2.resize(latest_frames[cam_id], (640, 360))
+                        resized = cv2.resize(frame_to_save, (640, 360))
                         out.write(resized)
+                        frames_written += 1
                     except Exception as e:
                         print(f"[RECORD] Erro ao gravar frame: {e}")
                         break
             time.sleep(0.05)
+        
         out.release()
-        print(f"Auto-gravação concluída: {vid_name}")
+        print(f"[RECORD] Auto-gravação concluída: {final_vid_path} ({frames_written} frames)")
 
     threading.Thread(target=auto_record, daemon=True).start()
 
@@ -995,13 +1008,20 @@ def start_record(cam_id):
         if recording_states.get(cam_id):
             return jsonify({"status": "error", "message": "Already recording"})
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        filename  = f"record_{cam_id}_{timestamp}.mp4"
+        filename  = f"record_{cam_id}_{timestamp}.webm"
         filepath  = os.path.join("alerts", filename)
-        fourcc    = cv2.VideoWriter_fourcc(*'XVID')
+        fourcc    = cv2.VideoWriter_fourcc(*'VP80')
         vw = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
         if not vw.isOpened():
-            print(f"[ERRO] Falha ao inicializar VideoWriter para {filepath}")
+            print(f"[ERRO] Falha ao inicializar VideoWriter (VP80) para {filepath}. Tentando XVID...")
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            filename = filename.replace(".webm", ".avi")
+            filepath = filepath.replace(".webm", ".avi")
+            vw = cv2.VideoWriter(filepath, fourcc, 20.0, (640, 360))
+        
+        if not vw.isOpened():
             return jsonify({"status": "error", "message": "Could not initialize video writer"})
+        
         recording_states[cam_id] = vw
     return jsonify({"status": "success", "filename": filename})
 
