@@ -433,17 +433,22 @@ def detect_production_active(frame, roi_points):
     cv2.fillPoly(mask, [roi_points], 255)
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    # Filtra tudo que não seja cinza/preto/branco puro (Saturação > 35, Value > 40)
-    lower_color = np.array([0, 35, 40])
+    # Filtra tudo que não seja cinza/preto/branco puro (Saturação > 50, Value > 50)
+    # Aumentamos S de 35 para 50 e V de 40 para 50 para ignorar ruído de sensor em baixa luz
+    lower_color = np.array([0, 50, 50])
     upper_color = np.array([180, 255, 255])
 
     color_mask = cv2.inRange(hsv, lower_color, upper_color)
     color_mask = cv2.bitwise_and(color_mask, mask)
 
+    # Limpeza morfológica para remover ruído isolado (puntos de "sal e pimenta" do sensor à noite)
+    kernel = np.ones((5, 5), np.uint8)
+    color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
+
     # Conta o número de pixels "coloridos" na ROI
     colored_area = np.sum(color_mask > 0)
     
-    # Limiar: Elevado para 40.000 pixels para evitar que a camisa do operador dispare falso positivo
+    # Limiar: Mantido em 40.000 pixels, mas agora com filtragem prévia
     return colored_area > 40000
 
 

@@ -176,7 +176,8 @@ CONFIG = {
     "min_delay_sec": 5.0,
     "max_jump_px": 150,
     "max_lateral_px": 20,      # Limiar de movimento lateral para resetar hits
-    "shift_end_delay_sec": 60  # Tempo de espera para confirmar fim de turno
+    "shift_end_delay_sec": 300, # Tempo de espera para confirmar fim de turno (5 min)
+    "shift_start_delay_sec": 10 # Tempo de espera para confirmar início de turno (10 s)
 }
 
 alert_history    = []
@@ -225,7 +226,8 @@ shift_data = {
     "turno_atual": 1,
     "trabalhos": [], # Lista de {"inicio": "HH:MM", "fim": "HH:MM"}
     "production_in_progress": False,
-    "last_active_time": time.time()
+    "last_active_time": time.time(),
+    "first_active_time": 0
 }
 
 # Carrega configurações e ROIs salvos em disco (sobrepõe os padrões acima)
@@ -251,24 +253,44 @@ def update_shift_stats(is_active, frame=None):
     if is_active:
         shift_data["last_active_time"] = now
 
-    # Detecta INÍCIO de trabalho (Imediato ao detectar carne)
+    # Detecta INÍCIO de trabalho (Com confirmação temporal e presença humana)
     if is_active and not shift_data["production_in_progress"]:
-        shift_data["production_in_progress"] = True
-        # Se já teve um fim de trabalho anterior no mesmo dia, incrementa o turno
-        if len(shift_data["trabalhos"]) > 0:
-            shift_data["turno_atual"] += 1
+        if shift_data["first_active_time"] == 0:
+            shift_data["first_active_time"] = now
+            print(f"[TURNO] Atividade detectada na esteira, aguardando confirmação de 10s...")
         
-        shift_data["trabalhos"].append({"inicio": now_time, "fim": "---"})
-        print(f"[TURNO] Inicio de trabalho: {now_time} (Turno {shift_data['turno_atual']})")
-        
-        # Salva estado imediatamente
-        persist_roi_config()
+        elif now - shift_data["first_active_time"] >= CONFIG.get("shift_start_delay_sec", 10):
+            # Verifica se há operadores presentes para confirmar que é um turno real e não ruído/manutenção
+            # Usamos uma detecção rápida de operadores apenas para este gatilho
+            operators = detect_operators(frame)
+            if len(operators) > 0:
+                shift_data["production_in_progress"] = True
+                shift_data["first_active_time"] = 0
+                
+                # Se já teve um fim de trabalho anterior no mesmo dia, incrementa o turno
+                if len(shift_data["trabalhos"]) > 0:
+                    shift_data["turno_atual"] += 1
+                
+                shift_data["trabalhos"].append({"inicio": now_time, "fim": "---"})
+                print(f"[TURNO] Inicio de trabalho CONFIRMADO: {now_time} (Turno {shift_data['turno_atual']})")
+                
+                # Salva estado imediatamente
+                persist_roi_config()
 
-        # Alerta Oracle: Início de Turno
-        msg = f"Inicio Turno {shift_data['turno_atual']} as {now_time}"
-        phone = CAMERAS.get("camera_01", {}).get("phone_number")
-        if phone and frame is not None:
-            insert_alert_to_db(phone, msg, frame)
+                # Alerta Oracle: Início de Turno
+                msg = f"Inicio Turno {shift_data['turno_atual']} as {now_time}"
+                phone = CAMERAS.get("camera_01", {}).get("phone_number")
+                if phone and frame is not None:
+                    insert_alert_to_db(phone, msg, frame)
+            else:
+                # Se não houver operador, continuamos esperando (pode ser a esteira ligando vazia)
+                # Não resetamos o first_active_time, apenas aguardamos o operador aparecer
+                if int(now) % 5 == 0: # Log a cada 5s
+                    print(f"[TURNO] Esteira ativa mas sem operadores. Aguardando presença humana para confirmar início de turno...")
+
+    # Se a esteira parar antes de confirmar o início, reseta o timer
+    elif not is_active and not shift_data["production_in_progress"]:
+        shift_data["first_active_time"] = 0
 
     # Detecta FIM de trabalho (Com confirmação de 60 segundos de inatividade)
     elif not is_active and shift_data["production_in_progress"]:
@@ -472,14 +494,34 @@ def trigger_alert(message, frame, cam_id):
 
     # Gravação automática de 20 s
     def auto_record():
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out    = cv2.VideoWriter(vid_path, fourcc, 20.0, (640, 360))
+        # Preferimos H.264 para navegadores (Chrome/Edge/Firefox)
+        # Tentamos múltiplos FourCCs comuns para H.264
+        codecs = ['avc1', 'H264', 'X264', 'mp4v']
+        out = None
+        
+        for codec in codecs:
+            fourcc = cv2.VideoWriter_fourcc(*codec)
+            out = cv2.VideoWriter(vid_path, fourcc, 20.0, (640, 360))
+            if out.isOpened():
+                print(f"[RECORD] Gravação iniciada com codec: {codec}")
+                break
+            else:
+                out.release()
+        
+        if not out or not out.isOpened():
+            print(f"[RECORD] Erro crítico: Nenhum codec funcionou para {vid_path}")
+            return
+
         end_t  = time.time() + 20
         while time.time() < end_t:
             with lock:
                 if cam_id in latest_frames and latest_frames[cam_id] is not None:
-                    resized = cv2.resize(latest_frames[cam_id], (640, 360))
-                    out.write(resized)
+                    try:
+                        resized = cv2.resize(latest_frames[cam_id], (640, 360))
+                        out.write(resized)
+                    except Exception as e:
+                        print(f"[RECORD] Erro ao gravar frame: {e}")
+                        break
             time.sleep(0.05)
         out.release()
         print(f"Auto-gravação concluída: {vid_name}")
