@@ -452,6 +452,32 @@ def detect_production_active(frame, roi_points):
     return colored_area > 40000
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CÁLCULO DE BRILHO (para validação de turno)
+# ─────────────────────────────────────────────────────────────────────────────
+def calculate_brightness(frame, roi_points=None):
+    """
+    Calcula o brilho médio da imagem ou da ROI. 
+    Usado para evitar falso-positivos em ambientes escuros (limpeza).
+    """
+    if frame is None:
+        return 0
+    
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    if roi_points is not None:
+        mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+        if isinstance(roi_points, (list, tuple)):
+            cv2.fillPoly(mask, roi_points, 255)
+        else:
+            cv2.fillPoly(mask, [roi_points], 255)
+        mean_val = cv2.mean(gray, mask=mask)[0]
+    else:
+        mean_val = cv2.mean(gray)[0]
+        
+    return mean_val
+
+
 if __name__ == "__main__":
     print("Iniciando motor de detecção...")
     roi_points = np.array([[100, 100], [450, 50], [550, 800], [50, 900]], np.int32)

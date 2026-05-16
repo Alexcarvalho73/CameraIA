@@ -27,7 +27,7 @@ except Exception as e:
 
 from flask import Flask, Response, jsonify, request, send_from_directory
 from flask_cors import CORS
-from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker, detect_production_active
+from detector import detect_green_stain, detect_hand, detect_operators, BlobTracker, detect_production_active, calculate_brightness
 
 app = Flask(__name__)
 CORS(app)
@@ -178,6 +178,7 @@ CONFIG = {
     "max_lateral_px": 20,      # Limiar de movimento lateral para resetar hits
     "shift_end_delay_sec": 300, # Tempo de espera para confirmar fim de turno (5 min)
     "shift_start_delay_sec": 10, # Tempo de espera para confirmar início de turno (10 s)
+    "shift_min_brightness": 60,  # Brilho mínimo para aceitar início de turno (0-255)
     "display_fps": 1           # FPS de exibição no navegador (para poupar CPU)
 }
 
@@ -262,10 +263,11 @@ def update_shift_stats(is_active, frame=None):
             print(f"[TURNO] Atividade detectada na esteira, aguardando confirmação de 10s...")
         
         elif now - shift_data["first_active_time"] >= CONFIG.get("shift_start_delay_sec", 10):
-            # Verifica se há operadores presentes para confirmar que é um turno real e não ruído/manutenção
-            # Usamos uma detecção rápida de operadores apenas para este gatilho
+            # Verifica se há operadores presentes E se há luz suficiente para confirmar que é um turno real
             operators = detect_operators(frame)
-            if len(operators) > 0:
+            brightness = calculate_brightness(frame)
+            
+            if len(operators) > 0 and brightness >= CONFIG.get("shift_min_brightness", 60):
                 shift_data["production_in_progress"] = True
                 shift_data["first_active_time"] = 0
                 
@@ -285,10 +287,10 @@ def update_shift_stats(is_active, frame=None):
                 if phone and frame is not None:
                     insert_alert_to_db(phone, msg, frame)
             else:
-                # Se não houver operador, continuamos esperando (pode ser a esteira ligando vazia)
-                # Não resetamos o first_active_time, apenas aguardamos o operador aparecer
-                if int(now) % 5 == 0: # Log a cada 5s
-                    print(f"[TURNO] Esteira ativa mas sem operadores. Aguardando presença humana para confirmar início de turno...")
+                # Se não houver operador ou luz suficiente, continuamos esperando
+                if int(now) % 10 == 0: # Log a cada 10s
+                    motivo = "sem operadores" if len(operators) == 0 else f"pouca luz ({brightness:.1f} < {CONFIG.get('shift_min_brightness', 60)})"
+                    print(f"[TURNO] Esteira ativa mas {motivo}. Aguardando condições de trabalho para confirmar início...")
 
     # Se a esteira parar antes de confirmar o início, reseta o timer
     elif not is_active and not shift_data["production_in_progress"]:
